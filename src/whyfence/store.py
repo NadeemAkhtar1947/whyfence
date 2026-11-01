@@ -405,14 +405,27 @@ def close_symbol_version(conn: sqlite3.Connection, symbol_id: str, sha: str) -> 
                      (sha, symbol_id))
 
 
-def current_symbol_versions(conn: sqlite3.Connection) -> list[tuple[Symbol, SymbolVersion]]:
-    """Every symbol that exists at the last indexed commit, with its current version."""
-    rows = conn.execute(
-        """SELECT s.id, s.kind, s.qualified_name AS symbol_name, s.language, v.*
-           FROM symbol_versions v JOIN symbols s ON s.id = v.symbol_id
-           WHERE v.valid_to_sha IS NULL ORDER BY v.file_path, v.start_line""",
-    )
+def current_symbol_versions(conn: sqlite3.Connection, file_path: str | None = None
+                            ) -> list[tuple[Symbol, SymbolVersion]]:
+    """Every symbol that exists at the last indexed commit (optionally in one file), with its current version."""
+    sql = """SELECT s.id, s.kind, s.qualified_name AS symbol_name, s.language, v.*
+             FROM symbol_versions v JOIN symbols s ON s.id = v.symbol_id
+             WHERE v.valid_to_sha IS NULL"""
+    params: tuple = ()
+    if file_path is not None:
+        sql += " AND v.file_path = ?"
+        params = (file_path,)
+    rows = conn.execute(sql + " ORDER BY v.file_path, v.start_line", params)
     return [(Symbol(r["id"], r["kind"], r["symbol_name"], r["language"]), _version_from_row(r)) for r in rows]
+
+
+def symbols_changed_in(conn: sqlite3.Connection, sha: str) -> list[str]:
+    """Ids of symbols a commit added, edited, renamed, moved or deleted."""
+    rows = conn.execute(
+        "SELECT DISTINCT symbol_id FROM symbol_versions WHERE valid_from_sha = ? OR valid_to_sha = ? ORDER BY symbol_id",
+        (sha, sha),
+    )
+    return [row[0] for row in rows]
 
 
 def clear_symbol_versions(conn: sqlite3.Connection) -> None:
@@ -521,6 +534,11 @@ def insert_event(
             [(event.id, symbol_id, relation) for symbol_id, relation in links],
         )
     return event
+
+
+def get_event(conn: sqlite3.Connection, event_id: str) -> Event | None:
+    row = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+    return _event_from_row(row) if row else None
 
 
 def supersede_event(conn: sqlite3.Connection, old_id: str, new_id: str) -> None:

@@ -10,10 +10,10 @@
 `symbol_name` can be a qualified name (`app.auth.refresh`), a bare name (`refresh`) or a
 symbol id. If a bare name matches several symbols, the tool returns the candidates.
 
-> **Status:** `history` works on real repositories: `whyfence ingest` indexes every
-> Python, JavaScript and TypeScript function and class across git history. `why` has no
-> data yet, because nothing records events (decisions, dead ends, ...) so far; until an
-> event ingestor lands it answers that nothing has been recorded.
+> **What feeds the tools:** `whyfence ingest` indexes every Python, JavaScript and
+> TypeScript function and class across git history (`history`), and mines commit
+> messages and Claude Code transcripts for reverts, fixes, decisions, corrections and
+> dead ends (`why`). Re-run it to pick up new commits and sessions.
 
 ## 1. Build the index
 

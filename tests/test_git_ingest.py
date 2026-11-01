@@ -64,8 +64,8 @@ def test_ingests_project_own_history(tmp_path):
                           check=True, capture_output=True, text=True).stdout.strip()
     db = tmp_path / "index.db"
 
-    assert main(["ingest", str(PROJECT_ROOT), "--db", str(db)]) == 0
-    assert main(["ingest", str(PROJECT_ROOT), "--db", str(db)]) == 0  # idempotent re-run
+    assert main(["ingest", str(PROJECT_ROOT), "--db", str(db), "--no-transcripts"]) == 0
+    assert main(["ingest", str(PROJECT_ROOT), "--db", str(db), "--no-transcripts"]) == 0  # idempotent re-run
 
     with closing(store.connect(db)) as conn:
         assert store.count_commits(conn) == expected

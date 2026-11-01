@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from whyfence import linter, store
-from whyfence.ingest import git, symbols
+from whyfence.ingest import events, git, symbols
 
 DEFAULT_DB = Path(".whyfence") / "index.db"
 
@@ -28,6 +28,9 @@ def _ingest(args: argparse.Namespace) -> int:
             commits = git.ingest_git(conn, root)
             with console.status("Indexing functions and classes…"):
                 indexed = symbols.ingest_symbols(conn, root)
+            with console.status("Mining commits and transcripts for decisions…"):
+                mined = events.ingest_events(conn, root, projects_dir=args.transcripts,
+                                             transcripts=not args.no_transcripts)
             total = store.count_commits(conn)
             symbol_count = store.count_symbols(conn)
     except (git.GitError, store.StoreError, symbols.SymbolError) as exc:
@@ -40,6 +43,9 @@ def _ingest(args: argparse.Namespace) -> int:
     console.print(f"Walked {_plural(indexed.commits, 'commit')}: {_plural(indexed.created, 'new symbol')}, "
                   f"{_plural(indexed.versions, 'version')}, {indexed.renamed} renamed or moved, "
                   f"{indexed.deleted} deleted · {symbol_count} symbols indexed")
+    console.print(f"Found {_plural(mined.commit_events, 'event')} in commit messages and "
+                  f"{_plural(mined.transcript_events, 'event')} in {_plural(mined.sessions, 'Claude Code session')}, "
+                  f"with {_plural(mined.links, 'symbol link')}")
     return 0
 
 
@@ -73,6 +79,9 @@ def main(argv: list[str] | None = None) -> int:
     ingest = commands.add_parser("ingest", help="index git history into the local database")
     ingest.add_argument("repo", nargs="?", type=Path, default=Path("."), help="repository (default: .)")
     ingest.add_argument("--db", type=Path, help=f"database path (default: <repo>/{DEFAULT_DB.as_posix()})")
+    ingest.add_argument("--transcripts", type=Path, metavar="DIR",
+                        help="Claude Code projects folder (default: ~/.claude/projects, or $CLAUDE_CONFIG_DIR/projects)")
+    ingest.add_argument("--no-transcripts", action="store_true", help="don't read Claude Code transcripts")
     ingest.set_defaults(func=_ingest)
 
     mcp = commands.add_parser("mcp", help="serve the why/history tools to MCP clients over stdio")

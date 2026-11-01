@@ -48,9 +48,24 @@ renamed and edited in the same commit: matching falls back from the name, to a
 fingerprint of the body without its name, to token similarity. Re-running only
 processes new commits; if history was rewritten, symbol history is rebuilt.
 
+Finally it mines *why* events and links them to those symbols:
+
+| Source | Events |
+|---|---|
+| Commit messages | `revert` (Revert "…", This reverts commit …), `incident` (`fix:`, Fixes #12, bug, crash), `decision` (`Why:` lines, "because", "so that", "instead of") |
+| Claude Code transcripts | `correction` (you pushing back: "No, don't…", "Actually, …"), `dead_end` (the agent realizing it was wrong: "I see the issue now", "turns out") |
+
+Commit events link to the symbols that commit changed. Transcript events link
+through the edits made around them and the symbols they name. Transcripts are read
+from `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR/projects`) for sessions in, under,
+or above the repository; pass `--no-transcripts` to skip them. Excerpts of those
+sessions are stored in the local index, with obvious secrets (API keys, tokens)
+redacted, and never leave your machine.
+
 The index is a local SQLite database (WAL mode, FTS5 search over events). It is
-rebuildable from history, so it is gitignored and safe to delete. The first run
-downloads the tree-sitter grammars it needs (via `tree-sitter-language-pack`).
+rebuildable from history, so it is gitignored and safe to delete. Grammars ship
+inside the `tree-sitter-python`, `-javascript` and `-typescript` wheels, so
+indexing works fully offline.
 
 ## `whyfence mcp`: let Claude ask why
 

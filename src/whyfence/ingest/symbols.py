@@ -89,15 +89,29 @@ def qualify(path: str, local_name: str) -> str:
     return f"{module_name(path)}.{local_name}"
 
 
+def _grammar(language: str):
+    # Grammars ship compiled inside these wheels, so parsing never touches the network.
+    if language == "python":
+        import tree_sitter_python
+
+        return tree_sitter_python.language()
+    if language == "javascript":
+        import tree_sitter_javascript
+
+        return tree_sitter_javascript.language()
+    import tree_sitter_typescript
+
+    return tree_sitter_typescript.language_tsx() if language == "tsx" else tree_sitter_typescript.language_typescript()
+
+
 @lru_cache(maxsize=None)
 def _parser(language: str):
-    try:
-        from tree_sitter_language_pack import get_parser
+    from tree_sitter import Language, Parser
 
-        return get_parser(language)
-    except Exception as exc:  # the pack downloads grammars on first use
-        raise SymbolError(f"couldn't load the tree-sitter grammar for {language} "
-                          f"(tree-sitter-language-pack fetches grammars on first use): {exc}") from exc
+    try:
+        return Parser(Language(_grammar(language)))
+    except (ImportError, ValueError) as exc:  # missing package, or an ABI the runtime can't load
+        raise SymbolError(f"couldn't load the tree-sitter grammar for {language}: {exc}") from exc
 
 
 _PY_DEFINITIONS = {"function_definition": "function", "class_definition": "class"}
@@ -157,9 +171,9 @@ def extract_symbols(path: str, source: bytes) -> list[ParsedSymbol]:
     python = language == "python"
     tree = _parser(language).parse(source)
     found: list[ParsedSymbol] = []
-    # Lines come from byte offsets, never from Node.start_point: with tree-sitter
-    # 0.26 and the language pack's grammars on Windows, reading start_point
-    # returns garbage rows and then crashes the process (access violation).
+    # Lines come from byte offsets, never from Node.start_point: with the
+    # tree-sitter 0.26 binding on Windows, reading start_point returns garbage
+    # rows and then crashes the process (access violation), whatever the grammar.
     newlines = [m.start() for m in re.finditer(b"\n", source)]
 
     def line_of(byte: int) -> int:
