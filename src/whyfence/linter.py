@@ -4,7 +4,8 @@ CLAUDE.md and AGENTS.md tell coding agents how to build, test and run a
 project, and they rot: a script is renamed in package.json or a make target is
 deleted, and every agent session keeps running a command that no longer exists.
 This module pulls runnable commands out of those files and checks each one
-against the Makefile or package.json it would actually run against.
+against what it would actually run: Makefile targets, package.json scripts,
+pyproject entry points, Python modules (`python -m`) and script files.
 
 Only what can be checked statically is judged. A command whose outcome depends
 on runtime state (computed target names, pattern rules, workspace filters) is
@@ -20,11 +21,13 @@ import json
 import os
 import re
 import shlex
+import sys
+import tomllib
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Sequence
 
 from rich.console import Console
 from rich.markup import escape
@@ -35,6 +38,8 @@ from rich.text import Text
 
 CONTEXT_FILE_NAMES = ("CLAUDE.md", "AGENTS.md", "CLAUDE.local.md")
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".tox", "dist", "target"}
+# Example projects often ship deliberately broken context files (ours does).
+DEFAULT_EXCLUDES = ("examples",)
 
 
 class Status(str, Enum):
@@ -55,10 +60,13 @@ class Snippet:
 
 @dataclass(frozen=True)
 class Command:
-    """One runner invocation (`make test`, `npm run dev`) to verify."""
+    """One runner invocation (`make test`, `npm run dev`, `python -m app`) to verify."""
 
     runner: str
-    target: str | None  # make goal or package.json script; None = make's default goal
+    # What `target` names: "task" (make goal / package.json script), "module"
+    # (`python -m`), "file" (a script path) or "entrypoint" (`uv run <name>`).
+    kind: str
+    target: str | None  # None = make's default goal
     cwd: Path | None  # directory it resolves against; None when not statically known
     text: str
     source: Path
@@ -146,10 +154,14 @@ def extract_snippets(markdown: str) -> Iterator[Snippet]:
 _SEPARATORS = {"&&", "||", ";", "|", "&", "|&", ";;", "(", ")"}
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PREFIX_COMMANDS = {"sudo", "time", "env", "nohup", "command"}
+_WINDOWS_SEPARATOR_RE = re.compile(r"\\(?=[A-Za-z0-9_.])")
 
 
 def _segments(text: str) -> list[list[str]]:
     """Split a shell line into simple commands, dropping redirections."""
+    # Windows paths (`.\.venv\Scripts\python`) would lose their backslashes to
+    # POSIX escaping; a backslash before a path character is a separator.
+    text = _WINDOWS_SEPARATOR_RE.sub("/", text)
     lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     try:
@@ -364,6 +376,115 @@ def _parse_bun(args: list[str], cwd: Path | None, inline: bool) -> list[dict]:
     return [dict(target=target, cwd=cwd, bin_fallback=True)]
 
 
+_PYTHON_RE = re.compile(r"^(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?$", re.IGNORECASE)
+_SCRIPT_SUFFIXES = {".py", ".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl"}
+_FILE_INTERPRETERS = {"bash", "sh", "zsh", "node", "ruby", "perl"}
+# Paths into installed environments depend on local setup, not on the repo.
+_ENVIRONMENT_DIRS = {"node_modules", ".venv", "venv", "env"}
+
+
+def _file_command(path: str, cwd: Path | None, runner: str) -> dict:
+    fields = dict(kind="file", target=path, cwd=cwd, runner=runner)
+    if any(ch in path for ch in "$*?[") or path.startswith("~"):
+        fields["note"] = "path is computed at runtime"
+    elif Path(path).is_absolute() or re.match(r"^[A-Za-z]:", path):
+        fields["note"] = "absolute paths depend on the machine"
+    return fields
+
+
+def _parse_python(args: list[str], cwd: Path | None, inline: bool) -> list[dict]:
+    """`python [opts] -m module` or `python [opts] script.py`."""
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith("-m"):
+            module = arg[2:] or (args[i + 1] if i + 1 < len(args) else "")
+            return [dict(kind="module", target=module, cwd=cwd, runner="python")] if module else []
+        if arg.startswith("-c") or arg == "-":
+            return []  # inline code or stdin
+        if arg in ("-X", "-W"):
+            i += 2
+            continue
+        if arg.startswith("-"):
+            i += 1
+            continue
+        return [_file_command(arg, cwd, "python")]
+    return []  # bare `python` starts a REPL
+
+
+def _parse_interpreter(args: list[str], cwd: Path | None, inline: bool, runner: str) -> list[dict]:
+    """`bash scripts/x.sh`, `node scripts/x.js`: the first positional is the script."""
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-c", "-e", "-p", "--eval", "--print"):
+            return []
+        if arg in ("-r", "--require", "--import", "--loader", "-o", "-O"):
+            i += 2
+            continue
+        if arg.startswith("-"):
+            i += 1
+            continue
+        return [_file_command(arg, cwd, runner)]
+    return []
+
+
+_UV_VALUE_OPTS = {
+    "--directory", "--project", "--package", "--with", "--with-requirements", "--with-editable",
+    "--python", "-p", "--extra", "--group", "--only-group", "--no-group", "--env-file", "--index",
+    "--default-index", "--index-url", "--extra-index-url", "--find-links", "-f", "--cache-dir",
+    "--config-file", "--color", "--prerelease", "--resolution", "--exclude-newer", "--link-mode",
+}
+_POETRY_VALUE_OPTS = {"-C", "--directory", "-P", "--project"}
+
+
+def _parse_project_runner(args: list[str], cwd: Path | None, inline: bool, runner: str) -> list[dict]:
+    """`uv run <cmd>` / `poetry run <cmd>`, with options before and after `run`."""
+    value_opts = _UV_VALUE_OPTS if runner == "uv" else _POETRY_VALUE_OPTS
+    seen_run = module = False
+    note: str | None = None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith("-"):
+            name, eq, value = arg.partition("=")
+            if name in value_opts and not eq:
+                i += 1
+                value = args[i] if i < len(args) else ""
+            if name in ("--directory", "--project", "-C", "-P"):
+                cwd = _join(cwd, value)
+            elif name == "--package":
+                note = "runs a workspace member"
+            elif name in ("-m", "--module") and runner == "uv":
+                module = True
+            i += 1
+            continue
+        if not seen_run:
+            if arg != "run":
+                return []  # `uv sync`, `poetry install`, ...
+            seen_run = True
+            i += 1
+            continue
+
+        rest = args[i + 1:]
+        if module:
+            found = [dict(kind="module", target=arg, cwd=cwd)]
+        elif _PYTHON_RE.match(Path(arg).name):
+            found = _parse_python(rest, cwd, inline)
+        elif "/" in arg or Path(arg).suffix in _SCRIPT_SUFFIXES:
+            found = [_file_command(arg, cwd, runner)]
+        elif arg in _RUNNER_PARSERS or arg in _FILE_INTERPRETERS:
+            return []  # `uv run make test` is checked as `make test` elsewhere
+        else:
+            found = [dict(kind="entrypoint", target=arg, cwd=cwd)]
+        for fields in found:
+            fields["runner"] = runner
+            if note and not fields.get("note"):
+                fields["note"] = note
+        return found
+    return []
+
+
 _RUNNER_PARSERS = {
     "make": _parse_make,
     "npm": _parse_npm,
@@ -371,6 +492,22 @@ _RUNNER_PARSERS = {
     "pnpm": _parse_pnpm,
     "bun": _parse_bun,
 }
+
+
+def _parser_for(head: str):
+    if head in _RUNNER_PARSERS:
+        return _RUNNER_PARSERS[head]
+    if head in ("uv", "poetry"):
+        return lambda args, cwd, inline: _parse_project_runner(args, cwd, inline, head)
+    if _PYTHON_RE.match(Path(head).name):  # also `.venv/Scripts/python`
+        return _parse_python
+    if head in _FILE_INTERPRETERS:
+        return lambda args, cwd, inline: _parse_interpreter(args, cwd, inline, head)
+    path = Path(head)
+    is_script = head.startswith(("./", "../")) or ("/" in head and path.suffix in _SCRIPT_SUFFIXES)
+    if is_script and not _ENVIRONMENT_DIRS & set(path.parts):
+        return lambda args, cwd, inline: [_file_command(head, cwd, "exec")]
+    return None
 
 
 def parse_commands(snippet: Snippet, root: Path, source: Path) -> Iterator[Command]:
@@ -387,11 +524,13 @@ def parse_commands(snippet: Snippet, root: Path, source: Path) -> Iterator[Comma
         if head == "popd":
             cwd = None
             continue
-        parser = _RUNNER_PARSERS.get(head)
+        parser = _parser_for(head)
         if parser is None:
             continue
         for fields in parser(segment[1:], cwd, snippet.inline):
-            yield Command(runner=head, text=" ".join(segment), source=source, line=snippet.line, **fields)
+            fields.setdefault("runner", head)
+            fields.setdefault("kind", "task")
+            yield Command(text=" ".join(segment), source=source, line=snippet.line, **fields)
 
 
 # --------------------------------------------------------------------------- #
@@ -516,6 +655,108 @@ def _load_package_at(path: Path, mtime_ns: int) -> PackageInfo | None:
 
 def load_package(path: Path) -> PackageInfo | None:
     return _load_package_at(path, path.stat().st_mtime_ns)
+
+
+_REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def _normalize(name: str) -> str:
+    """PEP 503 name normalization, with `_` so it also matches module names."""
+    return re.sub(r"[-_.]+", "_", name).lower()
+
+
+def _requirement_names(specs: Iterable) -> set[str]:
+    names = set()
+    for spec in specs:
+        match = _REQUIREMENT_NAME_RE.match(spec) if isinstance(spec, str) else None
+        if match:
+            names.add(_normalize(match.group(1)))
+    return names
+
+
+@dataclass(frozen=True)
+class PyProjectInfo:
+    scripts: frozenset[str]
+    dependencies: frozenset[str]  # normalized distribution names
+
+
+@lru_cache(maxsize=256)
+def _load_pyproject_at(path: Path, mtime_ns: int) -> PyProjectInfo | None:
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    project = data.get("project", {})
+    tool = data.get("tool", {})
+    poetry = tool.get("poetry", {})
+
+    scripts = set(project.get("scripts", {})) | set(project.get("gui-scripts", {})) | set(poetry.get("scripts", {}))
+    deps = _requirement_names(project.get("dependencies", []))
+    for group in project.get("optional-dependencies", {}).values():
+        deps |= _requirement_names(group)
+    for group in data.get("dependency-groups", {}).values():  # PEP 735
+        deps |= _requirement_names(group)
+    deps |= _requirement_names(tool.get("uv", {}).get("dev-dependencies", []))
+    poetry_tables = [poetry.get("dependencies", {}), poetry.get("dev-dependencies", {})]
+    poetry_tables += [g.get("dependencies", {}) for g in poetry.get("group", {}).values()]
+    for table in poetry_tables:
+        deps |= {_normalize(name) for name in table if name.lower() != "python"}
+    return PyProjectInfo(frozenset(scripts), frozenset(deps))
+
+
+@lru_cache(maxsize=256)
+def _load_requirements_at(path: Path, mtime_ns: int) -> frozenset[str]:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return frozenset()
+    return frozenset(_requirement_names(line for line in lines if not line.lstrip().startswith(("#", "-"))))
+
+
+@dataclass(frozen=True)
+class PythonEnv:
+    """What a Python command in some directory can see: its project and its .venv."""
+
+    pyproject: Path | None
+    scripts: frozenset[str]
+    dependencies: frozenset[str]
+    site_packages: tuple[Path, ...]
+    bin_dirs: tuple[Path, ...]
+
+
+def python_env(cwd: Path, root: Path) -> PythonEnv:
+    # uv and poetry find the project by walking up from the working directory.
+    pyproject = None
+    for directory in (cwd, *cwd.parents):
+        if (directory / "pyproject.toml").is_file():
+            pyproject = directory / "pyproject.toml"
+            break
+        if directory == root:
+            break
+    project_dir = pyproject.parent if pyproject else cwd
+
+    scripts: frozenset[str] = frozenset()
+    deps: set[str] = set()
+    if pyproject:
+        info = _load_pyproject_at(pyproject, pyproject.stat().st_mtime_ns)
+        if info:
+            scripts, deps = info.scripts, set(info.dependencies)
+    for directory in {cwd, project_dir}:
+        for req in sorted(directory.glob("requirements*.txt")):
+            deps |= _load_requirements_at(req, req.stat().st_mtime_ns)
+
+    site_packages: list[Path] = []
+    bin_dirs: list[Path] = []
+    for directory in dict.fromkeys((cwd, project_dir, root)):
+        venv = directory / ".venv"
+        if not venv.is_dir():
+            continue
+        site_packages += [venv / "Lib" / "site-packages", *sorted(venv.glob("lib/python*/site-packages"))]
+        bin_dirs += [venv / "Scripts", venv / "bin"]
+    return PythonEnv(
+        pyproject, scripts, frozenset(deps),
+        tuple(p for p in site_packages if p.is_dir()), tuple(p for p in bin_dirs if p.is_dir()),
+    )
 
 
 def _package_manager(cwd: Path) -> str:
@@ -658,11 +899,128 @@ def _check_script(cmd: Command, root: Path) -> Finding:
     return Finding(cmd, Status.STALE, f"no `{cmd.target}` script in {_display(package, root)}", suggestion)
 
 
+def _replace_token(text: str, old: str, new: str) -> str:
+    return " ".join(new if token == old else token for token in text.split(" "))
+
+
+def _local_module(base: Path, parts: list[str]) -> str | None:
+    """'ok' if `python -m` can run it from `base`, 'package' if it's a package it can't run."""
+    path = base.joinpath(*parts)
+    if path.with_suffix(".py").is_file():
+        return "ok"
+    if path.is_dir():
+        if (path / "__main__.py").is_file():
+            return "ok"
+        if (path / "__init__.py").is_file() or any(path.glob("*.py")):
+            return "package"
+    return None
+
+
+def _modules_in(package_dir: Path, prefix: str) -> list[str]:
+    names = []
+    for path in package_dir.rglob("*.py"):
+        if SKIP_DIRS & set(path.relative_to(package_dir).parts):
+            continue
+        rel = path.relative_to(package_dir).with_suffix("")
+        parts = [p for p in rel.parts if p != "__init__"]
+        if parts and parts[-1] == "__main__":
+            parts = parts[:-1]
+        names.append(".".join([prefix, *parts]))
+    return names
+
+
+def _check_module(cmd: Command, root: Path) -> Finding:
+    assert cmd.cwd is not None and cmd.target is not None
+    module = cmd.target
+    parts = module.split(".")
+    if not all(part.isidentifier() for part in parts):
+        return Finding(cmd, Status.UNVERIFIABLE, f"`{module}` is not a module name")
+
+    # `python -m` imports from the working directory; src/ layouts work once installed.
+    bases = [cmd.cwd, cmd.cwd / "src"]
+    for base in bases:
+        found = _local_module(base, parts)
+        if found == "ok":
+            return Finding(cmd, Status.OK, f"module in {_display(base, root)}")
+        if found == "package":
+            return Finding(cmd, Status.STALE,
+                           f"`{module}` is a package without __main__.py, so `python -m` can't run it")
+    for base in bases:
+        top = base / parts[0]
+        if len(parts) > 1 and (top / "__init__.py").is_file():
+            match = _closest(module, _modules_in(top, parts[0]))
+            return Finding(cmd, Status.STALE, f"no module `{module}` in {_display(top, root)}",
+                           _replace_token(cmd.text, module, match) if match else None)
+
+    if parts[0] in sys.stdlib_module_names or parts[0] == "pip":
+        return Finding(cmd, Status.OK, "standard library")
+    env = python_env(cmd.cwd, root)
+    if _normalize(parts[0]) in env.dependencies:
+        return Finding(cmd, Status.OK, f"provided by dependency `{parts[0]}`")
+    if any((sp / parts[0]).is_dir() or (sp / f"{parts[0]}.py").is_file() for sp in env.site_packages):
+        return Finding(cmd, Status.OK, "installed in .venv")
+    # It may still be installed globally, so absence alone isn't proof of staleness.
+    return Finding(cmd, Status.UNVERIFIABLE,
+                   f"`{parts[0]}` is not a local module, the standard library, or a declared dependency")
+
+
+def _check_entrypoint(cmd: Command, root: Path) -> Finding:
+    assert cmd.cwd is not None and cmd.target is not None
+    name = cmd.target
+    env = python_env(cmd.cwd, root)
+    if env.pyproject is None:
+        return Finding(cmd, Status.UNVERIFIABLE, f"no pyproject.toml, so `{cmd.runner} run` looks it up on PATH")
+    where = _display(env.pyproject, root)
+    if name in env.scripts:
+        return Finding(cmd, Status.OK, f"script in {where}")
+    if _normalize(name) in env.dependencies:
+        return Finding(cmd, Status.OK, f"provided by dependency `{name}`")
+    if any((d / name).exists() or (d / f"{name}.exe").exists() for d in env.bin_dirs):
+        return Finding(cmd, Status.OK, "installed in .venv")
+    match = _closest(name, env.scripts)
+    if match:
+        return Finding(cmd, Status.STALE, f"no `{name}` script in {where}", _replace_token(cmd.text, name, match))
+    return Finding(cmd, Status.UNVERIFIABLE,
+                   f"not a project script or declared dependency; `{cmd.runner} run` may find it on PATH")
+
+
+def _find_moved_file(name: str, root: Path) -> Path | None:
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and d not in _ENVIRONMENT_DIRS)
+        if name in filenames:
+            return Path(dirpath) / name
+    return None
+
+
+def _check_file(cmd: Command, root: Path) -> Finding:
+    assert cmd.cwd is not None and cmd.target is not None
+    path = Path(os.path.normpath(cmd.cwd / cmd.target))
+    if path.is_file():
+        return Finding(cmd, Status.OK, "file exists")
+    if path.is_dir():
+        if cmd.runner in ("python", "uv", "poetry") and (path / "__main__.py").is_file():
+            return Finding(cmd, Status.OK, "directory with __main__.py")
+        return Finding(cmd, Status.STALE, f"`{cmd.target}` is a directory, not a script")
+    moved = _find_moved_file(path.name, root)
+    suggestion = None
+    if moved:
+        new = os.path.relpath(moved, cmd.cwd).replace(os.sep, "/")
+        if cmd.target.startswith("./") and not new.startswith("."):
+            new = f"./{new}"
+        suggestion = _replace_token(cmd.text, cmd.target, new)
+    return Finding(cmd, Status.STALE, f"no file `{cmd.target}`", suggestion)
+
+
+_CHECKS = {"module": _check_module, "entrypoint": _check_entrypoint, "file": _check_file}
+
+
 def check(cmd: Command, root: Path) -> Finding:
     if cmd.note:
         return Finding(cmd, Status.UNVERIFIABLE, cmd.note)
     if cmd.cwd is None:
         return Finding(cmd, Status.UNVERIFIABLE, "runs in a directory that can't be resolved statically")
+    if cmd.kind in _CHECKS:
+        return _CHECKS[cmd.kind](cmd, root)
     return _check_make(cmd, root) if cmd.runner == "make" else _check_script(cmd, root)
 
 
@@ -677,12 +1035,30 @@ def project_root_for(context_file: Path) -> Path:
     return parent.parent if parent.name == ".claude" else parent
 
 
-def discover(root: Path) -> list[Path]:
-    """Find agent context files under `root`, including nested AGENTS.md files."""
+def _excluded(rel: str, patterns: Sequence[str]) -> bool:
+    """Match a scan-relative POSIX path against patterns, by full path or by name."""
+    name = rel.rsplit("/", 1)[-1]
+    return any(fnmatch.fnmatchcase(rel, p) or fnmatch.fnmatchcase(name, p) for p in patterns)
+
+
+def discover(root: Path, exclude: Sequence[str] = DEFAULT_EXCLUDES) -> list[Path]:
+    """Find agent context files under `root`, including nested AGENTS.md files.
+
+    `exclude` patterns are matched relative to `root`, so scanning inside an
+    excluded directory directly (`whyfence lint examples/demo`) still works.
+    """
+    patterns = [p.strip("/") for p in exclude if p.strip("/")]
     found: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
-        found.extend(Path(dirpath) / name for name in CONTEXT_FILE_NAMES if name in filenames)
+        rel_dir = Path(dirpath).relative_to(root).as_posix()
+        prefix = "" if rel_dir == "." else f"{rel_dir}/"
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in SKIP_DIRS and not _excluded(prefix + d, patterns)
+        )
+        found.extend(
+            Path(dirpath) / name for name in CONTEXT_FILE_NAMES
+            if name in filenames and not _excluded(prefix + name, patterns)
+        )
     return found
 
 
@@ -773,8 +1149,10 @@ def _render(results: dict[Path, list[Finding]], console: Console, base: Path, ve
     else:
         unverifiable = counts[Status.UNVERIFIABLE]
         extra = f" ({unverifiable} unverifiable)" if unverifiable else ""
+        resolved = "The 1 command" if total == 1 else f"All {total} commands"
         console.print(Panel(
-            Text(f"{'✓' if fancy else 'OK'} All {total} commands across {files} resolve{extra}.", style="green"),
+            Text(f"{'✓' if fancy else 'OK'} {resolved} across {files} resolve{'s' * (total == 1)}{extra}.",
+                 style="green"),
             border_style="green", expand=False,
         ))
 
@@ -789,6 +1167,7 @@ def _to_json(results: dict[Path, list[Finding]], base: Path) -> str:
                         "line": f.command.line,
                         "command": f.command.text,
                         "runner": f.command.runner,
+                        "kind": f.command.kind,
                         "target": f.command.target,
                         "status": f.status.value,
                         "reason": f.reason,
@@ -808,16 +1187,22 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     parser.add_argument("--strict", action="store_true", help="also fail on unverifiable commands")
     parser.add_argument("-v", "--verbose", action="store_true", help="show verified commands too")
+    parser.add_argument("--exclude", action="append", default=[], metavar="PATTERN",
+                        help="skip matching paths when scanning directories (glob on the relative path "
+                             "or name; repeatable)")
+    parser.add_argument("--no-default-excludes", action="store_true",
+                        help=f"don't skip {', '.join(f'{d}/' for d in DEFAULT_EXCLUDES)} by default")
     parser.set_defaults(func=run)
 
 
 def run(args: argparse.Namespace) -> int:
     console = Console(highlight=False)
     base = Path.cwd()
+    exclude = [*([] if args.no_default_excludes else DEFAULT_EXCLUDES), *args.exclude]
     files: list[Path] = []
     for path in args.paths:
         if path.is_dir():
-            files.extend(discover(path))
+            files.extend(discover(path, exclude))
         elif path.is_file():
             files.append(path)
         else:

@@ -224,6 +224,22 @@ def test_cli_strict_fails_on_unverifiable(tmp_path, monkeypatch):
     assert linter.main(["--strict"]) == 1
 
 
+def test_examples_are_excluded_by_default_but_scannable_directly(tmp_path, monkeypatch):
+    write(tmp_path, {
+        "CLAUDE.md": "`make test`",
+        "Makefile": "test:\n\tpytest\n",
+        "examples/demo/CLAUDE.md": "`make gone`",
+        "docs/legacy/AGENTS.md": "`make gone`",
+    })
+    monkeypatch.chdir(tmp_path)
+    assert linter.main(["--exclude", "docs/legacy"]) == 0
+    assert linter.main([]) == 1                                         # docs/legacy is stale
+    assert linter.main(["--exclude", "AGENTS.md"]) == 0                 # match by name
+    assert linter.main(["--no-default-excludes", "--exclude", "legacy"]) == 1
+    assert linter.main(["examples/demo"]) == 1                          # explicit path still lints
+    assert linter.main(["examples/demo/CLAUDE.md"]) == 1
+
+
 def test_discover_skips_vendored_dirs(tmp_path):
     write(tmp_path, {
         "AGENTS.md": "",
@@ -232,3 +248,152 @@ def test_discover_skips_vendored_dirs(tmp_path):
     })
     found = {p.relative_to(tmp_path).as_posix() for p in linter.discover(tmp_path)}
     assert found == {"AGENTS.md", "packages/web/AGENTS.md"}
+
+
+# --------------------------------------------------------------------------- #
+# Python
+# --------------------------------------------------------------------------- #
+
+PYPROJECT = """\
+[project]
+name = "app"
+dependencies = ["uvicorn[standard]>=0.30", "Typer"]
+
+[project.scripts]
+app-serve = "app.cli:serve"
+
+[dependency-groups]
+dev = ["pytest>=8", {include-group = "lint"}]
+lint = ["ruff"]
+"""
+
+
+def python_repo(tmp_path: Path, doc: str) -> None:
+    write(tmp_path, {
+        "pyproject.toml": PYPROJECT,
+        "app/__init__.py": "",
+        "app/__main__.py": "",
+        "app/cli.py": "",
+        "app/jobs/__init__.py": "",
+        "app/jobs/reindex.py": "",
+        "tools/__init__.py": "",
+        "scripts/seed_db.py": "",
+        "CLAUDE.md": doc,
+    })
+
+
+def test_python_modules(tmp_path):
+    python_repo(tmp_path, (
+        "```bash\n"
+        "python -m app\n"
+        "python3 -m app.jobs.reindex\n"
+        "python -m app.jobs.rebuild\n"
+        "python -m tools\n"
+        "python -m http.server 8000\n"
+        "python -m pytest -q\n"
+        "python -m uvicorn app.main:app\n"
+        "python -m black .\n"
+        "```\n"
+    ))
+    findings = lint_file(tmp_path / "CLAUDE.md")
+    assert [f.status for f in findings] == [
+        Status.OK,            # package with __main__.py
+        Status.OK,            # submodule
+        Status.STALE,         # renamed submodule
+        Status.STALE,         # package without __main__.py
+        Status.OK,            # stdlib
+        Status.OK,            # dependency group (pytest)
+        Status.OK,            # dependency with extras (uvicorn[standard])
+        Status.UNVERIFIABLE,  # could be installed globally
+    ]
+    assert findings[2].suggestion == "python -m app.jobs.reindex"
+    assert "__main__.py" in findings[3].reason
+
+
+def test_python_scripts_and_moved_files(tmp_path):
+    python_repo(tmp_path, (
+        "```bash\n"
+        "python scripts/seed_db.py --fresh\n"
+        "python scripts/seed.py\n"
+        "python seed_db.py\n"
+        "python -c 'print(1)'\n"
+        "```\n"
+    ))
+    findings = lint_file(tmp_path / "CLAUDE.md")
+    assert [(f.command.text, f.status) for f in findings] == [
+        ("python scripts/seed_db.py --fresh", Status.OK),
+        ("python scripts/seed.py", Status.STALE),
+        ("python seed_db.py", Status.STALE),
+    ]
+    assert findings[1].suggestion is None
+    assert findings[2].suggestion == "python scripts/seed_db.py"
+
+
+def test_uv_and_poetry_run(tmp_path):
+    python_repo(tmp_path, (
+        "```bash\n"
+        "uv run app-serve\n"
+        "uv run app-server\n"
+        "uv run pytest -x\n"
+        "uv run ruff check .\n"
+        "uv run --frozen python -m app\n"
+        "uv run -m app.jobs.reindex\n"
+        "uv run scripts/seed_db.py\n"
+        "uv run --package api serve\n"
+        "uv run mkdocs serve\n"
+        "uv sync\n"
+        "poetry run app-serve\n"
+        "```\n"
+    ))
+    findings = lint_file(tmp_path / "CLAUDE.md")
+    assert [(f.command.text, f.status) for f in findings] == [
+        ("uv run app-serve", Status.OK),
+        ("uv run app-server", Status.STALE),
+        ("uv run pytest -x", Status.OK),
+        ("uv run ruff check .", Status.OK),
+        ("uv run --frozen python -m app", Status.OK),
+        ("uv run -m app.jobs.reindex", Status.OK),
+        ("uv run scripts/seed_db.py", Status.OK),
+        ("uv run --package api serve", Status.UNVERIFIABLE),
+        ("uv run mkdocs serve", Status.UNVERIFIABLE),
+        ("poetry run app-serve", Status.OK),
+    ]
+    assert findings[1].suggestion == "uv run app-serve"
+
+
+def test_uv_directory_option_and_requirements_txt(tmp_path):
+    write(tmp_path, {
+        "api/pyproject.toml": '[project]\nname = "api"\n',
+        "api/requirements-dev.txt": "# tools\nalembic==1.13\n-r requirements.txt\n",
+        "CLAUDE.md": "`uv run --directory api alembic upgrade head`",
+    })
+    assert results(tmp_path) == [("uv run --directory api alembic upgrade head", Status.OK)]
+
+
+def test_windows_venv_paths_and_direct_scripts(tmp_path):
+    write(tmp_path, {
+        "backend/app/__init__.py": "",
+        "backend/app/__main__.py": "",
+        "scripts/release.sh": "",
+        "CLAUDE.md": (
+            r"Backend tests: `cd backend; .\.venv\Scripts\python -m app`." "\n"
+            "```bash\n"
+            "./scripts/release.sh --dry-run\n"
+            "bash scripts/deploy.sh\n"
+            "./node_modules/.bin/eslint .\n"
+            "```\n"
+        ),
+    })
+    assert results(tmp_path) == [
+        ("./.venv/Scripts/python -m app", Status.OK),
+        ("./scripts/release.sh --dry-run", Status.OK),
+        ("bash scripts/deploy.sh", Status.STALE),
+    ]
+
+
+def test_python_modules_installed_only_in_venv(tmp_path):
+    write(tmp_path, {
+        ".venv/Lib/site-packages/hypothesis/__init__.py": "",
+        "CLAUDE.md": "`python -m hypothesis` `python -m nonexistent_tool`",
+    })
+    assert [s for _, s in results(tmp_path)] == [Status.OK, Status.UNVERIFIABLE]
