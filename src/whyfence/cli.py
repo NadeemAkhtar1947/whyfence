@@ -80,7 +80,8 @@ def main(argv: list[str] | None = None) -> int:
     ingest.add_argument("repo", nargs="?", type=Path, default=Path("."), help="repository (default: .)")
     ingest.add_argument("--db", type=Path, help=f"database path (default: <repo>/{DEFAULT_DB.as_posix()})")
     ingest.add_argument("--transcripts", type=Path, metavar="DIR",
-                        help="Claude Code projects folder (default: ~/.claude/projects, or $CLAUDE_CONFIG_DIR/projects)")
+                        help="Claude Code projects folder, or one project's transcript folder "
+                             "(default: ~/.claude/projects, or $CLAUDE_CONFIG_DIR/projects)")
     ingest.add_argument("--no-transcripts", action="store_true", help="don't read Claude Code transcripts")
     ingest.set_defaults(func=_ingest)
 

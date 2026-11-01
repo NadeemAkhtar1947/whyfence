@@ -92,6 +92,69 @@ def test_corrections_need_context_and_short_messages():
     assert classify_turn(turn("assistant", "The demo shows an agent avoiding a known dead end.")) is None
 
 
+@pytest.mark.parametrize("text, rule", [
+    ("Build the UI. Don't touch the billing module, finance audits it.", "Don't touch the billing module, finance audits it."),
+    ("Must use Decimal for money.", "Must use Decimal for money."),
+    ("Remember to run migrations before tests.", "Remember to run migrations before tests."),
+    ("From now on, put new endpoints under /v2.", "From now on, put new endpoints under /v2."),
+    ("Uploads must stay synchronous; the client polls.", "Uploads must stay synchronous; the client polls."),
+    ("Never call refresh() from the event loop.", "Never call refresh() from the event loop."),
+    ("Should I always use the cache?", None),            # a question isn't a rule
+    ("Never mind, it works.", None),
+    ("Add a test for logout.", None),
+])
+def test_find_constraint(text, rule):
+    assert events.find_constraint(text) == rule
+
+
+@pytest.mark.parametrize("text, decision", [
+    ("- The file model is `TaskFile`, not `File`, because `File` would clash with `fastapi.File`.",
+     "The file model is `TaskFile`, not `File`, because `File` would clash with `fastapi.File`."),
+    ("I used `Decimal` instead of `float` to avoid rounding errors in totals.",
+     "I used `Decimal` instead of `float` to avoid rounding errors in totals."),
+    ("We went with `httpx` because it supports async.", "We went with `httpx` because it supports async."),
+    ("I renamed `File` because of a clash.", None),                     # a reason, but no choice
+    ("The model is `TaskFile`, not `File`.", None),                     # a choice, but no reason
+    ("I chose this approach instead of a queue because it's simpler.", None),  # no code named
+])
+def test_find_decision(text, decision):
+    assert events.find_decision(text) == decision
+
+
+@pytest.mark.parametrize("text, kind", [
+    ("Confirming the real bug is genuinely fixed.", None),
+    ("The real bug is that the proxy is lazy.", "dead_end"),
+])
+def test_real_bug_needs_a_realization(text, kind):
+    finding = classify_turn(turn("assistant", text))
+    assert (finding.kind if finding else None) == kind
+
+
+def test_compaction_summaries_are_not_user_turns(tmp_path):
+    session = tmp_path / "s.jsonl"
+    write_session(session, [
+        user("1", tmp_path, "2026-02-10T10:00:00Z", "This session is being continued... must use Decimal.",
+             isCompactSummary=True, isVisibleInTranscriptOnly=True),
+        user("2", tmp_path, "2026-02-10T10:00:01Z", "Must use Decimal."),
+    ])
+    assert [t.uuid for t in read_session(session)] == ["2"]
+
+
+def test_commit_constraints_are_separate_events(repo_factory):
+    repo = repo_factory()
+    repo.commit("add", {"m.py": "def send():\n    return 1\n"})
+    repo.commit("fix: send retries\n\nNever call send() from the event loop; it blocks.",
+                {"m.py": "def send():\n    return 2\n"})
+    with closing(store.connect()) as conn:
+        git.ingest_git(conn, repo.path)
+        symbols.ingest_symbols(conn, repo.path)
+        events.ingest_events(conn, repo.path, transcripts=False)
+        assert sorted((e["kind"], e["summary"]) for e in mcp_server.lookup_why(conn, "send")["events"]) == [
+            ("constraint", "Never call send() from the event loop; it blocks."),
+            ("incident", "fix: send retries"),
+        ]
+
+
 def test_injected_tags_are_dropped_and_wrappers_unwrapped():
     text = ('<pasted_content id="4cae">No, revert that.</pasted_content id="4cae">'
             "<system-reminder>internal</system-reminder>")
@@ -257,7 +320,7 @@ def test_why_returns_commit_and_transcript_events_for_a_symbol(scenario, tmp_pat
     root, projects, fix = scenario
     with closing(store.connect(tmp_path / "index.db")) as conn:
         result = ingest_all(conn, root, projects)
-        assert (result.commit_events, result.transcript_events, result.sessions) == (1, 3, 2)
+        assert (result.commit_events, result.transcript_events, result.sessions) == (1, 4, 2)
 
         answer = mcp_server.lookup_why(conn, "app.auth.refresh")
         assert answer["status"] == "ok"
@@ -275,9 +338,12 @@ def test_why_returns_commit_and_transcript_events_for_a_symbol(scenario, tmp_pat
         assert correction["source"]["uri"].endswith("session-1.jsonl")
         assert correction["recorded_at"] == "2026-02-10T10:03:00Z"
 
+        # "Don't touch `logout` ..." is both a correction (it pushes back) and a standing rule.
         logout = mcp_server.lookup_why(conn, "logout")
-        assert [(e["kind"], e["source"]["uri"].endswith("session-2.jsonl")) for e in logout["events"]] == [
-            ("correction", True)]
+        assert sorted((e["kind"], e["source"]["uri"].endswith("session-2.jsonl")) for e in logout["events"]) == [
+            ("constraint", True), ("correction", True)]
+        rule = next(e for e in logout["events"] if e["kind"] == "constraint")
+        assert rule["summary"].startswith("Don't touch `logout`")
 
         # Nothing from the unrelated project, and re-running adds nothing.
         assert all("elsewhere" not in e.body for e in store.events_between(conn))

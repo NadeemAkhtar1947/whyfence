@@ -24,7 +24,7 @@ import os
 import re
 import sqlite3
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Iterator
@@ -127,12 +127,32 @@ _CORRECTION_ANYWHERE_RE = re.compile(
 )
 _REALIZATION_RE = re.compile(
     r"\bi see the (?:issue|problem|bug)\b|\bi see what'?s (?:happening|going on)\b|"
-    r"\b(?:the|that'?s the) (?:real|actual) (?:issue|problem|cause|bug)\b|\broot cause\b|\bturns out\b|"
+    # "the real bug is ..." realizes something; "the real bug is fixed" reports success.
+    r"\b(?:the|that'?s the) (?:real|actual) (?:issue|problem|cause|bug)(?: here)? (?:is|was)\b(?! (?:now |genuinely )?fixed)|"
+    r"\broot cause\b|\bturns out\b|"
     r"\b(?:that|this) (?:didn'?t|did not|doesn'?t|does not) work\b|"
     r"\b(?:this|that) approach (?:won'?t|will not|doesn'?t|does not|can'?t) work\b|"
     r"\bmy mistake\b|\bi was wrong\b|\bi made a mistake\b|\bthat'?s not it\b",
     re.I,
 )
+# Standing rules: what must (not) happen from now on, not a reaction to one mistake.
+_CONSTRAINT_RE = re.compile(
+    r"\b(?:don'?t|do not|never)\s+(?:ever\s+)?(?!mind\b)"
+    r"(?:touch|modify|change|edit|remove|delete|rename|refactor|move|bump|upgrade|downgrade|disable|bypass|"
+    r"hard-?code|commit|push|block|call)\b"
+    r"|\b(?:must|has to|have to)\s+(?:always\s+)?(?:use|be|stay|remain|keep|go|run|pass|return|match|call)\b"
+    r"|\balways\s+(?:use|run|call|keep|go through|pass|return|check)\b"
+    r"|\bremember to\b|\bfrom now on\b|\bgoing forward\b|\bmake sure (?:you )?(?:always|never)\b",
+    re.I,
+)
+# A design decision the agent states: it names code, makes a choice, and gives a reason,
+# e.g. "The model is `TaskFile`, not `File`, because `File` would clash with `fastapi.File`."
+_CODE_SPAN_RE = re.compile(r"`[A-Za-z_$][\w$.]*(?:\(\))?`")
+_CHOICE_RE = re.compile(
+    r",? not `[^`]+`|\binstead of\b|\brather than\b|\bover `[^`]+`|\b(?:i |we )?(?:chose|picked|went with|opted for)\b",
+    re.I,
+)
+_REASON_RE = re.compile(r"\bbecause\b|\bto avoid\b|\bso that\b|\botherwise\b|\bwhich would\b|\bsince\b", re.I)
 # Blocks the harness injects into user turns; their contents aren't the user's words.
 _INJECTED_TAGS = {
     "system-reminder", "ide_selection", "ide_opened_file", "ide_diagnostics", "command-name", "command-message",
@@ -167,9 +187,15 @@ def _encode_project(path: Path | str) -> str:
 
 
 def transcript_files(projects_dir: Path, repo: Path) -> list[Path]:
-    """Transcripts from sessions started in `repo`, inside it, or in a folder containing it."""
+    """Transcripts from sessions started in `repo`, inside it, or in a folder containing it.
+
+    `projects_dir` is Claude Code's projects folder, or one project's folder of transcripts.
+    """
     if not projects_dir.is_dir():
         return []
+    direct = sorted(projects_dir.glob("*.jsonl"))
+    if direct:
+        return direct
     target = _encode_project(repo)
     files: list[Path] = []
     for folder in sorted(p for p in projects_dir.iterdir() if p.is_dir()):
@@ -225,6 +251,8 @@ def read_session(path: Path) -> Iterator[_Turn]:
                 continue
             if record.get("isSidechain") or record.get("isMeta"):
                 continue
+            if record.get("isCompactSummary") or record.get("isVisibleInTranscriptOnly"):
+                continue  # Claude Code's own summary after compaction, filed as a user turn
             message = record.get("message") or {}
             content = message.get("content") if isinstance(message, dict) else None
             blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content or []
@@ -254,6 +282,26 @@ def read_session(path: Path) -> Iterator[_Turn]:
             text = _strip_injected("\n".join(texts))
             yield _Turn(record["type"], str(record.get("uuid") or ""), record.get("cwd"),
                         _parse_timestamp(record.get("timestamp")), text, edits, touched)
+
+
+def _sentences(text: str) -> list[str]:
+    return [s.strip() for s in _SENTENCE_RE.split(text) if s.strip()]
+
+
+def find_decision(text: str) -> str | None:
+    """The first sentence of an agent's text that states a design choice and its reason."""
+    for sentence in _sentences(text):
+        if _CODE_SPAN_RE.search(sentence) and _CHOICE_RE.search(sentence) and _REASON_RE.search(sentence):
+            return sentence.lstrip("-*• ").strip()[:SUMMARY_LIMIT]
+    return None
+
+
+def find_constraint(text: str) -> str | None:
+    """The first sentence of `text` that states a standing rule, if any."""
+    for sentence in _sentences(text):
+        if not sentence.endswith("?") and _CONSTRAINT_RE.search(sentence):
+            return sentence[:SUMMARY_LIMIT]
+    return None
 
 
 def _first_sentences(text: str, start: int = 0, count: int = 2) -> str:
@@ -410,25 +458,37 @@ def _focus(located: set[str], named: set[str]) -> set[str]:
 
 def ingest_commit_events(conn: sqlite3.Connection, linker: _Linker, result: EventIngestResult) -> None:
     for commit in store.commits_between(conn, newest_first=False):
+        found: list[tuple[Event, str]] = []
         finding = classify_commit(commit.message)
-        if finding is None or store.get_event(conn, _event_id("commit", commit.sha)) is not None:
+        if finding is not None:
+            found.append((_commit_event(commit, finding), _RELATION[finding.kind]))
+        _, _, body = commit.message.partition("\n")
+        rule = find_constraint(body)
+        if rule is not None:  # "Never call this from the event loop": a standing rule, kept on its own
+            constraint = replace(_commit_event(commit, CommitFinding("constraint", "INFERRED")),
+                                 summary=_redact(rule), id=_event_id("commit", commit.sha, "constraint"))
+            found.append((constraint, "about"))
+        found = [(event, relation) for event, relation in found if store.get_event(conn, event.id) is None]
+        if not found:
             continue
         changed = set(store.symbols_changed_in(conn, commit.sha))
         named = linker.symbols_named(commit.message, linker.by_file) & changed
-        relation = _RELATION[finding.kind]
         with store.batch(conn):
             store.insert_source(conn, Source(f"commit:{commit.sha}", "commit", uri=commit.sha,
                                              captured_at=commit.authored_at))
-            links = [(sid, relation) for sid in _focus(changed, named)]
-            if _store_event(conn, _commit_event(commit, finding), links, result):
-                result.commit_events += 1
+            for event, relation in found:
+                links = [(sid, relation) for sid in _focus(changed, named)]
+                if _store_event(conn, event, links, result):
+                    result.commit_events += 1
 
 
-def _session_links(linker: _Linker, turns: list[_Turn], index: int, kind: str) -> set[tuple[str, str]]:
+def _session_links(linker: _Linker, turns: list[_Turn], index: int, kind: str,
+                   sentence: str | None = None) -> set[tuple[str, str]]:
     """Symbols an event is about: the edits it reacts to (corrections) or leads to (dead ends)."""
     turn = turns[index]
-    if kind == "correction":
-        # The assistant turns since the previous user message are what's being corrected.
+    if kind in ("correction", "constraint"):
+        # The assistant turns since the previous user message are what's being corrected,
+        # or the context a rule is stated in.
         window = []
         for previous in reversed(turns[:index]):
             if previous.role == "user":
@@ -453,6 +513,11 @@ def _session_links(linker: _Linker, turns: list[_Turn], index: int, kind: str) -
         files |= {p for raw in t.touched if (p := linker.resolve_path(raw, t.cwd))}
     files |= set(linker.paths_in(turn.text, turn.cwd))
     named = linker.symbols_named(turn.text, files)
+    if kind in ("constraint", "decision"):
+        # A rule or a choice is about what it names, not about whatever was just edited.
+        # Long turns name many things; resolve names from the rule's own sentence.
+        located = set()
+        named = linker.symbols_named(sentence or turn.text, files)
     return {(sid, "about") for sid in _focus(located, named)}
 
 
@@ -465,28 +530,31 @@ def _ingest_session(conn: sqlite3.Connection, path: Path, linker: _Linker, resul
     added = False
     seen_assistant = False
     for index, turn in enumerate(turns):
-        finding = classify_turn(turn, after_assistant=seen_assistant)
+        findings = [f for f in (classify_turn(turn, after_assistant=seen_assistant),) if f]
         seen_assistant |= turn.role == "assistant"
-        if finding is None:
-            continue
-        links = _session_links(linker, turns, index, finding.kind)
-        if not links and not in_repo:
-            continue  # a session elsewhere that never touched this repository
-        event = Event(
-            kind=finding.kind,
-            summary=_redact(finding.summary),
-            body=_redact(turn.text)[:BODY_LIMIT],
-            source_id=f"transcript:{session_id}",
-            confidence="INFERRED",
-            recorded_at=turn.timestamp or captured_at,
-            id=_event_id("transcript", session_id, turn.uuid, finding.kind),
-        )
-        with store.batch(conn):
-            store.insert_source(conn, Source(f"transcript:{session_id}", "transcript", agent="claude-code",
-                                             uri=str(path), captured_at=captured_at))
-            if _store_event(conn, event, links, result):
-                result.transcript_events += 1
-                added = True
+        if turn.role == "user" and (rule := find_constraint(turn.text)):
+            findings.append(TranscriptFinding("constraint", rule))
+        if turn.role == "assistant" and (choice := find_decision(turn.text)):
+            findings.append(TranscriptFinding("decision", choice))
+        for finding in findings:
+            links = _session_links(linker, turns, index, finding.kind, finding.summary)
+            if not links and not in_repo:
+                continue  # a session elsewhere that never touched this repository
+            event = Event(
+                kind=finding.kind,
+                summary=_redact(finding.summary),
+                body=_redact(turn.text)[:BODY_LIMIT],
+                source_id=f"transcript:{session_id}",
+                confidence="INFERRED",
+                recorded_at=turn.timestamp or captured_at,
+                id=_event_id("transcript", session_id, turn.uuid, finding.kind),
+            )
+            with store.batch(conn):
+                store.insert_source(conn, Source(f"transcript:{session_id}", "transcript", agent="claude-code",
+                                                 uri=str(path), captured_at=captured_at))
+                if _store_event(conn, event, links, result):
+                    result.transcript_events += 1
+                    added = True
     return added
 
 
