@@ -10,9 +10,10 @@
 `symbol_name` can be a qualified name (`app.auth.refresh`), a bare name (`refresh`) or a
 symbol id. If a bare name matches several symbols, the tool returns the candidates.
 
-> **Status:** the server works end to end, but whyfence does not index symbols or
-> events yet; `whyfence ingest` currently records commits only. Until it does, both tools
-> answer `not_found` on real repositories.
+> **Status:** `history` works on real repositories: `whyfence ingest` indexes every
+> Python, JavaScript and TypeScript function and class across git history. `why` has no
+> data yet, because nothing records events (decisions, dead ends, ...) so far; until an
+> event ingestor lands it answers that nothing has been recorded.
 
 ## 1. Build the index
 

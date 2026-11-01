@@ -72,6 +72,7 @@ def lookup_history(conn: sqlite3.Connection, symbol_name: str) -> dict[str, Any]
     for entry in store.symbol_timeline(conn, symbol.id):
         version = entry.version
         versions.append({
+            "name": version.qualified_name or symbol.qualified_name,
             "file": version.file_path,
             "lines": [version.start_line, version.end_line],
             "body_hash": version.body_hash,

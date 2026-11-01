@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Iterator, Sequence
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 EVENT_KINDS = ("decision", "dead_end", "correction", "constraint", "revert", "incident")
 SOURCE_KINDS = ("commit", "pr", "transcript", "adr", "manual")
@@ -50,9 +51,11 @@ CREATE TABLE symbol_versions (
     body_hash      TEXT NOT NULL,
     valid_from_sha TEXT NOT NULL,
     valid_to_sha   TEXT,                  -- NULL = still current
+    qualified_name TEXT,                  -- name at this version; a rename starts a new one
     PRIMARY KEY (symbol_id, valid_from_sha)
 );
 CREATE INDEX symbol_versions_file ON symbol_versions (file_path);
+CREATE INDEX symbol_versions_current ON symbol_versions (symbol_id) WHERE valid_to_sha IS NULL;
 
 CREATE TABLE sources (
     id           TEXT PRIMARY KEY,
@@ -88,6 +91,12 @@ CREATE INDEX event_links_symbol ON event_links (symbol_id);
 -- Keyed by event id rather than declared with content='events': VACUUM may
 -- renumber the rowids of a table without an INTEGER PRIMARY KEY, which would
 -- silently detach an external-content index from its rows.
+-- Ingestor bookkeeping, e.g. the last commit whose symbols were indexed.
+CREATE TABLE meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE events_fts USING fts5 (event_id UNINDEXED, summary, body);
 
 CREATE TRIGGER events_fts_insert AFTER INSERT ON events BEGIN
@@ -100,6 +109,15 @@ CREATE TRIGGER events_fts_update AFTER UPDATE OF summary, body ON events BEGIN
     UPDATE events_fts SET summary = new.summary, body = new.body WHERE event_id = old.id;
 END;
 """
+
+# Steps from each older schema version to the next.
+MIGRATIONS = {
+    1: """
+ALTER TABLE symbol_versions ADD COLUMN qualified_name TEXT;
+CREATE INDEX symbol_versions_current ON symbol_versions (symbol_id) WHERE valid_to_sha IS NULL;
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+""",
+}
 
 
 class StoreError(RuntimeError):
@@ -145,6 +163,7 @@ class SymbolVersion:
     body_hash: str
     valid_from_sha: str
     valid_to_sha: str | None = None
+    qualified_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -173,6 +192,28 @@ class Event:
 # --------------------------------------------------------------------------- #
 # Connection
 # --------------------------------------------------------------------------- #
+
+
+_BATCHING: set[int] = set()  # id() of connections inside batch()
+
+
+@contextmanager
+def batch(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """Group store writes into one transaction: all of them land, or none do."""
+    if id(conn) in _BATCHING:
+        yield conn
+        return
+    _BATCHING.add(id(conn))
+    try:
+        with conn:
+            yield conn
+    finally:
+        _BATCHING.discard(id(conn))
+
+
+def _tx(conn: sqlite3.Connection) -> AbstractContextManager:
+    """Each write commits on its own, unless it runs inside batch()."""
+    return nullcontext() if id(conn) in _BATCHING else conn
 
 
 def to_timestamp(when: datetime) -> str:
@@ -207,10 +248,14 @@ def init_db(conn: sqlite3.Connection) -> None:
         return
     if version > SCHEMA_VERSION:
         raise StoreError(f"database schema v{version} is newer than this whyfence (v{SCHEMA_VERSION})")
-    if version != 0:
+    if version == 0:
+        script = SCHEMA
+    elif all(v in MIGRATIONS for v in range(version, SCHEMA_VERSION)):
+        script = "\n".join(MIGRATIONS[v] for v in range(version, SCHEMA_VERSION))
+    else:
         raise StoreError(f"no migration from schema v{version}")
     try:
-        conn.executescript(f"BEGIN;\n{SCHEMA}\nPRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;")
+        conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;")
     except sqlite3.OperationalError as exc:
         conn.rollback()
         if "fts5" in str(exc):
@@ -231,7 +276,7 @@ def _commit_from_row(row: sqlite3.Row) -> Commit:
 def insert_commits(conn: sqlite3.Connection, commits: Iterable[Commit]) -> int:
     """Insert commits, skipping SHAs already stored. Returns how many were new."""
     rows = [(c.sha, c.author, to_timestamp(c.authored_at), c.message, " ".join(c.parents)) for c in commits]
-    with conn:
+    with _tx(conn):
         before = conn.total_changes
         conn.executemany(
             "INSERT OR IGNORE INTO commits (sha, author, authored_at, message, parents) VALUES (?, ?, ?, ?, ?)",
@@ -288,7 +333,7 @@ def commits_between(
 
 def upsert_symbol(conn: sqlite3.Connection, symbol: Symbol) -> None:
     """Insert a symbol, or update its name in place (a rename keeps the id)."""
-    with conn:
+    with _tx(conn):
         conn.execute(
             """INSERT INTO symbols (id, kind, qualified_name, language) VALUES (?, ?, ?, ?)
                ON CONFLICT (id) DO UPDATE SET
@@ -337,7 +382,7 @@ def find_symbols(conn: sqlite3.Connection, name: str, *, limit: int = 20) -> lis
 
 def record_symbol_version(conn: sqlite3.Connection, version: SymbolVersion) -> None:
     """Add a version of a symbol, closing whichever version was current until now."""
-    with conn:
+    with _tx(conn):
         conn.execute(
             """UPDATE symbol_versions SET valid_to_sha = ?
                WHERE symbol_id = ? AND valid_to_sha IS NULL AND valid_from_sha != ?""",
@@ -345,25 +390,57 @@ def record_symbol_version(conn: sqlite3.Connection, version: SymbolVersion) -> N
         )
         conn.execute(
             """INSERT INTO symbol_versions
-                   (symbol_id, file_path, start_line, end_line, body_hash, valid_from_sha, valid_to_sha)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (symbol_id, file_path, start_line, end_line, body_hash, valid_from_sha, valid_to_sha,
+                    qualified_name)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (version.symbol_id, version.file_path, version.start_line, version.end_line,
-             version.body_hash, version.valid_from_sha, version.valid_to_sha),
+             version.body_hash, version.valid_from_sha, version.valid_to_sha, version.qualified_name),
         )
+
+
+def close_symbol_version(conn: sqlite3.Connection, symbol_id: str, sha: str) -> None:
+    """End a symbol's current version at `sha` (the symbol was deleted there)."""
+    with _tx(conn):
+        conn.execute("UPDATE symbol_versions SET valid_to_sha = ? WHERE symbol_id = ? AND valid_to_sha IS NULL",
+                     (sha, symbol_id))
+
+
+def current_symbol_versions(conn: sqlite3.Connection) -> list[tuple[Symbol, SymbolVersion]]:
+    """Every symbol that exists at the last indexed commit, with its current version."""
+    rows = conn.execute(
+        """SELECT s.id, s.kind, s.qualified_name AS symbol_name, s.language, v.*
+           FROM symbol_versions v JOIN symbols s ON s.id = v.symbol_id
+           WHERE v.valid_to_sha IS NULL ORDER BY v.file_path, v.start_line""",
+    )
+    return [(Symbol(r["id"], r["kind"], r["symbol_name"], r["language"]), _version_from_row(r)) for r in rows]
+
+
+def clear_symbol_versions(conn: sqlite3.Connection) -> None:
+    """Drop all versions so symbol history can be rebuilt. Symbols (and event links) stay."""
+    with _tx(conn):
+        conn.execute("DELETE FROM symbol_versions")
+
+
+def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    with _tx(conn):
+        conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                     (key, value))
 
 
 def _version_from_row(row: sqlite3.Row) -> SymbolVersion:
     return SymbolVersion(row["symbol_id"], row["file_path"], row["start_line"], row["end_line"],
-                         row["body_hash"], row["valid_from_sha"], row["valid_to_sha"])
+                         row["body_hash"], row["valid_from_sha"], row["valid_to_sha"], row["qualified_name"])
 
 
 def symbol_history(conn: sqlite3.Connection, symbol_id: str) -> list[SymbolVersion]:
-    """Every recorded version of a symbol, oldest first."""
-    rows = conn.execute(
-        """SELECT v.* FROM symbol_versions v LEFT JOIN commits c ON c.sha = v.valid_from_sha
-           WHERE v.symbol_id = ? ORDER BY c.authored_at, v.rowid""",
-        (symbol_id,),
-    )
+    """Every recorded version of a symbol, in the order history produced them."""
+    # Insertion order follows history; author dates can run backwards after a rebase.
+    rows = conn.execute("SELECT * FROM symbol_versions WHERE symbol_id = ? ORDER BY rowid", (symbol_id,))
     return [_version_from_row(row) for row in rows]
 
 
@@ -408,7 +485,7 @@ def symbols_as_of(conn: sqlite3.Connection, when: datetime) -> list[tuple[Symbol
 
 
 def insert_source(conn: sqlite3.Connection, source: Source) -> None:
-    with conn:
+    with _tx(conn):
         conn.execute(
             """INSERT OR IGNORE INTO sources (id, kind, agent, uri, content_hash, captured_at)
                VALUES (?, ?, ?, ?, ?, ?)""",
@@ -431,7 +508,7 @@ def insert_event(
     links: Iterable[tuple[str, str]] = (),
 ) -> Event:
     """Store an event and link it to symbols as `(symbol_id, relation)` pairs."""
-    with conn:
+    with _tx(conn):
         conn.execute(
             """INSERT INTO events (id, kind, summary, body, source_id, commit_sha, confidence,
                                    recorded_at, superseded_by)
@@ -448,7 +525,7 @@ def insert_event(
 
 def supersede_event(conn: sqlite3.Connection, old_id: str, new_id: str) -> None:
     """Mark `old_id` as replaced by `new_id`. The old event is kept as history."""
-    with conn:
+    with _tx(conn):
         updated = conn.execute("UPDATE events SET superseded_by = ? WHERE id = ?", (new_id, old_id)).rowcount
     if not updated:
         raise StoreError(f"no event {old_id}")

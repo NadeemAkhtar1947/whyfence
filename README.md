@@ -41,8 +41,16 @@ Try it on the bundled example: `uv run whyfence lint examples/stale-repo`.
 $ whyfence ingest                       # index this repo into .whyfence/index.db
 ```
 
+It records every commit, then walks HEAD's first-parent history and indexes each
+Python, JavaScript and TypeScript function, method and class with tree-sitter.
+Symbols keep their identity when they are renamed, moved to another file, or
+renamed and edited in the same commit: matching falls back from the name, to a
+fingerprint of the body without its name, to token similarity. Re-running only
+processes new commits; if history was rewritten, symbol history is rebuilt.
+
 The index is a local SQLite database (WAL mode, FTS5 search over events). It is
-rebuildable from history, so it is gitignored and safe to delete.
+rebuildable from history, so it is gitignored and safe to delete. The first run
+downloads the tree-sitter grammars it needs (via `tree-sitter-language-pack`).
 
 ## `whyfence mcp`: let Claude ask why
 

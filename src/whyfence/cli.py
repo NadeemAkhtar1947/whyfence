@@ -10,9 +10,13 @@ from rich.console import Console
 from rich.markup import escape
 
 from whyfence import linter, store
-from whyfence.ingest import git
+from whyfence.ingest import git, symbols
 
 DEFAULT_DB = Path(".whyfence") / "index.db"
+
+
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}{'s' * (count != 1)}"
 
 
 def _ingest(args: argparse.Namespace) -> int:
@@ -21,13 +25,21 @@ def _ingest(args: argparse.Namespace) -> int:
         root = git.repo_root(args.repo)
         db_path = args.db or root / DEFAULT_DB
         with closing(store.connect(db_path)) as conn:
-            result = git.ingest_git(conn, root)
+            commits = git.ingest_git(conn, root)
+            with console.status("Indexing functions and classes…"):
+                indexed = symbols.ingest_symbols(conn, root)
             total = store.count_commits(conn)
-    except (git.GitError, store.StoreError) as exc:
+            symbol_count = store.count_symbols(conn)
+    except (git.GitError, store.StoreError, symbols.SymbolError) as exc:
         console.print(f"[red]error:[/] {escape(str(exc))}")
         return 2
-    console.print(f"Read [bold]{result.seen}[/] commit{'s' * (result.seen != 1)} from {escape(root.name)}: "
-                  f"[green]{result.inserted} new[/], {total} indexed in {escape(str(db_path))}")
+    console.print(f"Read {_plural(commits.seen, 'commit')} from {escape(root.name)}: "
+                  f"[green]{commits.inserted} new[/], {total} indexed in {escape(str(db_path))}")
+    if indexed.rebuilt:
+        console.print("[yellow]History was rewritten since the last run; rebuilt symbol history.[/]")
+    console.print(f"Walked {_plural(indexed.commits, 'commit')}: {_plural(indexed.created, 'new symbol')}, "
+                  f"{_plural(indexed.versions, 'version')}, {indexed.renamed} renamed or moved, "
+                  f"{indexed.deleted} deleted · {symbol_count} symbols indexed")
     return 0
 
 
