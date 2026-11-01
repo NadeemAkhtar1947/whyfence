@@ -299,7 +299,40 @@ def upsert_symbol(conn: sqlite3.Connection, symbol: Symbol) -> None:
 
 def get_symbol(conn: sqlite3.Connection, symbol_id: str) -> Symbol | None:
     row = conn.execute("SELECT * FROM symbols WHERE id = ?", (symbol_id,)).fetchone()
-    return Symbol(row["id"], row["kind"], row["qualified_name"], row["language"]) if row else None
+    return _symbol_from_row(row) if row else None
+
+
+def _symbol_from_row(row: sqlite3.Row) -> Symbol:
+    return Symbol(row["id"], row["kind"], row["qualified_name"], row["language"])
+
+
+# Separators between a qualified name's scope and the symbol: Python/JS `.`,
+# Rust/C++ `::`, Ruby `#`, path-style `/`.
+_SCOPE_SEPARATORS = (".", "::", "#", "/")
+
+
+def count_symbols(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT count(*) FROM symbols").fetchone()[0]
+
+
+def find_symbols(conn: sqlite3.Connection, name: str, *, limit: int = 20) -> list[Symbol]:
+    """Resolve a name to symbols: an exact id or qualified name, else a trailing-name match.
+
+    `refresh` matches `app.auth.refresh` and `Session::refresh`, but not `prefresh`.
+    """
+    rows = conn.execute("SELECT * FROM symbols WHERE id = ? OR qualified_name = ? ORDER BY qualified_name",
+                        (name, name)).fetchall()
+    if not rows:
+        escaped = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        patterns = [f"%{sep}{escaped}" for sep in _SCOPE_SEPARATORS]
+        rows = conn.execute(
+            f"""SELECT * FROM symbols WHERE {' OR '.join("qualified_name LIKE ? ESCAPE '\\'" for _ in patterns)}
+                ORDER BY length(qualified_name), qualified_name LIMIT ?""",
+            (*patterns, limit),
+        ).fetchall()
+        # LIKE is case-insensitive for ASCII; symbol names are not.
+        rows = [r for r in rows if r["qualified_name"].endswith(name)]
+    return [_symbol_from_row(row) for row in rows]
 
 
 def record_symbol_version(conn: sqlite3.Connection, version: SymbolVersion) -> None:
@@ -334,6 +367,25 @@ def symbol_history(conn: sqlite3.Connection, symbol_id: str) -> list[SymbolVersi
     return [_version_from_row(row) for row in rows]
 
 
+@dataclass(frozen=True)
+class TimelineEntry:
+    version: SymbolVersion
+    introduced_by: Commit | None  # None if that commit hasn't been ingested
+    replaced_by: Commit | None  # None while the version is current, or if not ingested
+
+
+def symbol_timeline(conn: sqlite3.Connection, symbol_id: str) -> list[TimelineEntry]:
+    """A symbol's versions, oldest first, with the commits that bound each one."""
+    return [
+        TimelineEntry(
+            version,
+            get_commit(conn, version.valid_from_sha),
+            get_commit(conn, version.valid_to_sha) if version.valid_to_sha else None,
+        )
+        for version in symbol_history(conn, symbol_id)
+    ]
+
+
 def symbols_as_of(conn: sqlite3.Connection, when: datetime) -> list[tuple[Symbol, SymbolVersion]]:
     """Symbols as they stood at `when`, judged by the author dates of the bounding commits."""
     stamp = to_timestamp(when)
@@ -363,6 +415,14 @@ def insert_source(conn: sqlite3.Connection, source: Source) -> None:
             (source.id, source.kind, source.agent, source.uri, source.content_hash,
              to_timestamp(source.captured_at)),
         )
+
+
+def get_source(conn: sqlite3.Connection, source_id: str) -> Source | None:
+    row = conn.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
+    if row is None:
+        return None
+    return Source(row["id"], row["kind"], row["agent"], row["uri"], row["content_hash"],
+                  from_timestamp(row["captured_at"]))
 
 
 def insert_event(

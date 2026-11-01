@@ -44,6 +44,14 @@ $ whyfence ingest                       # index this repo into .whyfence/index.d
 The index is a local SQLite database (WAL mode, FTS5 search over events). It is
 rebuildable from history, so it is gitignored and safe to delete.
 
+## `whyfence mcp`: let Claude ask why
+
+```console
+$ whyfence mcp                          # serve why() and history() over stdio
+```
+
+See [README_MCP.md](README_MCP.md) for the Claude Code and Claude Desktop config.
+
 ## Development
 
 ```console

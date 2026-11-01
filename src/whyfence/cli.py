@@ -31,6 +31,21 @@ def _ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _default_db(repo: Path) -> Path:
+    try:
+        root = git.repo_root(repo)
+    except git.GitError:
+        root = repo
+    return (root / DEFAULT_DB).resolve()
+
+
+def _mcp(args: argparse.Namespace) -> int:
+    from whyfence import mcp_server  # deferred: the MCP stack is slow to import
+
+    mcp_server.serve(args.db.resolve() if args.db else _default_db(args.repo))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="whyfence",
@@ -47,6 +62,12 @@ def main(argv: list[str] | None = None) -> int:
     ingest.add_argument("repo", nargs="?", type=Path, default=Path("."), help="repository (default: .)")
     ingest.add_argument("--db", type=Path, help=f"database path (default: <repo>/{DEFAULT_DB.as_posix()})")
     ingest.set_defaults(func=_ingest)
+
+    mcp = commands.add_parser("mcp", help="serve the why/history tools to MCP clients over stdio")
+    mcp.add_argument("--repo", type=Path, default=Path("."),
+                     help="repository whose index to serve (default: .)")
+    mcp.add_argument("--db", type=Path, help=f"database path (default: <repo>/{DEFAULT_DB.as_posix()})")
+    mcp.set_defaults(func=_mcp)
 
     args = parser.parse_args(argv)
     return args.func(args)
