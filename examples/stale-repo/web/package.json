@@ -1,0 +1,1 @@
+{ "name": "web", "scripts": { "dev": "vite", "preview": "vite preview" } }

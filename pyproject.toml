@@ -1,0 +1,24 @@
+[project]
+name = "whyfence"
+version = "0.1.0"
+description = "Temporal memory for coding agents: why the code is the way it is."
+readme = "README.md"
+authors = [
+    { name = "Md Nadeem Akhtar", email = "nadeemnns2000@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "rich>=15.0.0",
+]
+
+[project.scripts]
+whyfence = "whyfence:main"
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
