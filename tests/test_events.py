@@ -363,3 +363,26 @@ def test_transcripts_can_be_disabled(scenario, tmp_path):
         symbols.ingest_symbols(conn, root)
         result = events.ingest_events(conn, root, projects_dir=projects, transcripts=False)
         assert (result.commit_events, result.transcript_events) == (1, 0)
+
+
+def test_why_and_history_commands(scenario, tmp_path, capsys):
+    from whyfence.cli import main
+
+    root, projects, fix = scenario
+    db = tmp_path / "cli.db"
+    assert main(["ingest", str(root), "--db", str(db), "--transcripts", str(projects)]) == 0
+    capsys.readouterr()
+
+    assert main(["why", "refresh", "--db", str(db)]) == 0
+    out = capsys.readouterr().out
+    assert "app.auth.refresh" in out and "dead_end" in out and "commit " + fix[:7] in out
+
+    assert main(["why", "refresh", "--db", str(db), "--json"]) == 0
+    with closing(store.connect(db)) as conn:
+        assert json.loads(capsys.readouterr().out) == mcp_server.lookup_why(conn, "refresh")
+
+    assert main(["history", "app.auth.refresh", "--db", str(db)]) == 0
+    assert "[current]" in capsys.readouterr().out
+
+    assert main(["why", "nonexistent", "--db", str(db)]) == 1
+    assert main(["history", "x", "--db", str(tmp_path / "missing.db")]) == 2

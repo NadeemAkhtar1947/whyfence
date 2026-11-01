@@ -366,7 +366,8 @@ class _Linker:
 
     @staticmethod
     def _parts(path: Path) -> list[str]:
-        parts = list(Path(os.path.abspath(path)).parts)
+        # realpath: macOS temp dirs (/var -> /private/var) and symlinked checkouts compare equal.
+        parts = list(Path(os.path.realpath(path)).parts)
         return [p.lower() for p in parts] if os.name == "nt" else parts
 
     def resolve_path(self, raw: str, cwd: str | None) -> str | None:
@@ -374,7 +375,7 @@ class _Linker:
         candidate = Path(raw.replace("\\", "/") if os.name != "nt" else raw)
         if not candidate.is_absolute():
             candidate = Path(cwd or self.repo) / candidate
-        parts = list(Path(os.path.abspath(candidate)).parts)
+        parts = list(Path(os.path.realpath(candidate)).parts)
         compare = [p.lower() for p in parts] if os.name == "nt" else parts
         if compare[:len(self._repo_parts)] != self._repo_parts:
             return None

@@ -778,7 +778,9 @@ def _display(path: Path, root: Path) -> str:
     try:
         rel = os.path.relpath(path, root)
     except ValueError:  # different drive on Windows
-        return str(path)
+        return Path(path).as_posix()
+    if rel == ".." or rel.startswith(".." + os.sep):
+        return Path(path).as_posix()  # outside `root`: an absolute path reads better than ../../..
     return "./" if rel == "." else rel.replace(os.sep, "/")
 
 

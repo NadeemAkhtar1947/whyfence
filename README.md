@@ -1,5 +1,9 @@
 # whyfence
 
+[![CI](https://github.com/NadeemAkhtar1947/whyfence/actions/workflows/ci.yml/badge.svg)](https://github.com/NadeemAkhtar1947/whyfence/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/NadeemAkhtar1947/whyfence/blob/main/LICENSE)
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)
+
 **Your coding agent knows *what* your code does. whyfence tells it *why*.**
 
 whyfence gives AI coding agents a memory of how your code got the way it is: the
@@ -60,12 +64,35 @@ is renamed, moved to another file, or renamed and edited in the same commit.
 
 ---
 
-## Quick start
-
-whyfence is alpha and not on PyPI yet. Install from source with [uv](https://docs.astral.sh/uv/):
+## Try it in one minute
 
 ```console
-$ git clone https://github.com/<you>/whyfence && cd whyfence
+$ git clone https://github.com/NadeemAkhtar1947/whyfence && cd whyfence
+$ ./demo.sh
+```
+
+[`demo.sh`](https://github.com/NadeemAkhtar1947/whyfence/blob/main/demo.sh) builds a throwaway repository and a mock Claude Code session in
+a temp folder, then runs `whyfence lint`, `whyfence ingest`, `whyfence why` and
+`whyfence history` on them. It needs only bash, git and
+[uv](https://docs.astral.sh/uv/), and it never touches your own repositories or
+`~/.claude`. The `why` step prints what an agent learns before touching `refresh()`:
+
+```text
+app.tokens.refresh  function · python
+constraint  2026-02-10  From now on, never call `refresh` from the request path; the background renewer owns it.
+dead_end    2026-02-10  I see the issue now: retrying here stacked on top of the client's retries. I'll revert the loop.
+correction  2026-02-10  No, don't retry inside refresh(). The HTTP client already retries, so this doubles every request.
+incident    2026-02-03  fix: refresh tokens before they expire
+```
+
+---
+
+## Quick start
+
+whyfence is alpha. Install from source with [uv](https://docs.astral.sh/uv/):
+
+```console
+$ git clone https://github.com/NadeemAkhtar1947/whyfence && cd whyfence
 $ uv sync
 $ uv run whyfence ingest /path/to/your/repo        # example output
 Read 412 commits from your-repo: 412 new, 412 indexed in /path/to/your/repo/.whyfence/index.db
@@ -87,7 +114,7 @@ Then connect your agent. For Claude Code, add `.mcp.json` to your repository:
 }
 ```
 
-Claude Desktop and other clients: see [README_MCP.md](README_MCP.md).
+Claude Desktop and other clients: see [README_MCP.md](https://github.com/NadeemAkhtar1947/whyfence/blob/main/README_MCP.md).
 
 Re-run `whyfence ingest` whenever you like. It only processes new commits and
 sessions, and it rebuilds symbol history automatically if history was rewritten.
@@ -119,6 +146,14 @@ introduced it, the commit that replaced it, and its name, file and lines at the 
 
 Names can be qualified (`app.auth.refresh`), bare (`refresh`) or a symbol id. An
 ambiguous bare name returns the candidates instead of guessing.
+
+The same answers are available from the command line, for you or for scripts:
+
+```console
+$ whyfence why refresh              # readable summary
+$ whyfence history app.auth.refresh
+$ whyfence why refresh --json       # exactly what the MCP tool returns
+```
 
 The server tells agents to call `why` before changing code that looks wrong or
 redundant, and to treat recorded constraints and dead ends as binding unless they
@@ -234,4 +269,4 @@ history and verifies every recorded version against Python's `ast`.
 
 ## License
 
-TBD.
+[MIT](https://github.com/NadeemAkhtar1947/whyfence/blob/main/LICENSE)

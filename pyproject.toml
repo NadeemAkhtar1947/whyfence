@@ -1,20 +1,45 @@
 [project]
 name = "whyfence"
 version = "0.1.0"
-description = "Temporal memory for coding agents: why the code is the way it is."
+description = "Temporal memory for AI coding agents: why your code is the way it is, served over MCP."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Md Nadeem Akhtar", email = "nadeemnns2000@gmail.com" }
 ]
+keywords = [
+    "ai", "coding-agents", "mcp", "model-context-protocol", "claude", "claude-code", "llm", "memory",
+    "git", "code-history", "tree-sitter", "developer-tools", "linter",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Version Control :: Git",
+]
 requires-python = ">=3.12"
 dependencies = [
-    "mcp>=2.3.0",
+    "mcp>=2.3.0,<3",
     "rich>=15.0.0",
     "tree-sitter>=0.26.0",
     "tree-sitter-javascript>=0.25.0",
     "tree-sitter-python>=0.25.0",
     "tree-sitter-typescript>=0.23.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/NadeemAkhtar1947/whyfence"
+Repository = "https://github.com/NadeemAkhtar1947/whyfence"
+Issues = "https://github.com/NadeemAkhtar1947/whyfence/issues"
+Documentation = "https://github.com/NadeemAkhtar1947/whyfence/blob/main/README_MCP.md"
 
 [project.scripts]
 whyfence = "whyfence:main"
