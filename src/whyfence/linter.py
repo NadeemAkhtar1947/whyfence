@@ -1231,6 +1231,9 @@ def run(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from whyfence.console import harden_streams
+
+    harden_streams()
     parser = argparse.ArgumentParser(prog="whyfence-lint", description=__doc__.splitlines()[0])
     add_arguments(parser)
     args = parser.parse_args(argv)

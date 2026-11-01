@@ -386,3 +386,22 @@ def test_why_and_history_commands(scenario, tmp_path, capsys):
 
     assert main(["why", "nonexistent", "--db", str(db)]) == 1
     assert main(["history", "x", "--db", str(tmp_path / "missing.db")]) == 2
+
+
+def test_cli_output_survives_narrow_encodings(scenario, tmp_path, monkeypatch):
+    """Windows reports NUL as a terminal and encodes it as cp1252; output must not crash."""
+    import io
+    import sys
+
+    from whyfence.cli import main
+
+    root, projects, _ = scenario
+    db = tmp_path / "narrow.db"
+    for argv in (["ingest", str(root), "--db", str(db), "--transcripts", str(projects)],
+                 ["why", "refresh", "--db", str(db)],
+                 ["history", "refresh", "--db", str(db)]):
+        narrow = io.TextIOWrapper(io.BytesIO(), encoding="ascii")
+        monkeypatch.setattr(sys, "stdout", narrow)
+        assert main(argv) == 0
+        narrow.flush()
+        assert narrow.buffer.getvalue()  # something was written, with unencodable characters replaced

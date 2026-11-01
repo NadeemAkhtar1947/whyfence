@@ -357,9 +357,15 @@ def test_indexes_whyfence_own_history(tmp_path):
             qualified = f"{module_name(path)}.{local_name}"
             expected = expected_versions(path, local_name)
             assert expected, f"{qualified} should exist in this project's history"
-            (symbol,) = store.find_symbols(conn, qualified)
-            recorded = store.symbol_history(conn, symbol.id)
-            assert [(v.valid_from_sha, v.start_line, v.end_line) for v in recorded] == expected, qualified
+            # Look the symbol up by a name it had in this file, not by its current name:
+            # code moves (lookup_history moved from mcp_server.py to queries.py), and
+            # following it is the point.
+            (symbol_id,) = [row[0] for row in conn.execute(
+                "SELECT DISTINCT symbol_id FROM symbol_versions WHERE file_path = ? AND qualified_name = ?",
+                (path, qualified))]
+            recorded = store.symbol_history(conn, symbol_id)
+            in_file = [(v.valid_from_sha, v.start_line, v.end_line) for v in recorded if v.file_path == path]
+            assert in_file == expected, qualified
             # Each version ends where the next begins; the last is current.
             assert [v.valid_to_sha for v in recorded] == [v.valid_from_sha for v in recorded[1:]] + [None]
 

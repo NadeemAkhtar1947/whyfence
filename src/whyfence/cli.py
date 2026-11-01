@@ -13,6 +13,7 @@ from rich.table import Table
 from rich.text import Text
 
 from whyfence import linter, store
+from whyfence.console import harden_streams
 from whyfence.ingest import events, git, symbols
 
 DEFAULT_DB = Path(".whyfence") / "index.db"
@@ -147,6 +148,7 @@ def _mcp(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    harden_streams()
     parser = argparse.ArgumentParser(
         prog="whyfence",
         description="Temporal memory for coding agents: why the code is the way it is.",
