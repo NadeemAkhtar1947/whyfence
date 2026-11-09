@@ -87,6 +87,12 @@ def iter_commits(repo: Path | str = ".", *, rev: str = "HEAD", max_count: int | 
             yield _parse_record(record)
 
 
+def config_value(repo: Path | str, key: str) -> str | None:
+    result = subprocess.run(_git(repo, "config", "--get", key), capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
+    return result.stdout.strip() or None if result.returncode == 0 else None
+
+
 def is_ancestor(repo: Path | str, ancestor: str, descendant: str = "HEAD") -> bool:
     return subprocess.run(_git(repo, "merge-base", "--is-ancestor", ancestor, descendant),
                           capture_output=True).returncode == 0

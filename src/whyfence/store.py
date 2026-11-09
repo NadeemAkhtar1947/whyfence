@@ -60,7 +60,7 @@ CREATE INDEX symbol_versions_current ON symbol_versions (symbol_id) WHERE valid_
 CREATE TABLE sources (
     id           TEXT PRIMARY KEY,
     kind         TEXT NOT NULL CHECK (kind IN {SOURCE_KINDS}),
-    agent        TEXT,                    -- claude-code, codex, cursor, ...
+    agent        TEXT,                    -- claude-code, codex, gemini-cli
     uri          TEXT,
     content_hash TEXT,
     captured_at  TEXT NOT NULL
@@ -534,6 +534,23 @@ def insert_event(
             [(event.id, symbol_id, relation) for symbol_id, relation in links],
         )
     return event
+
+
+def event_links_of(conn: sqlite3.Connection, event_id: str) -> list[tuple[str, str]]:
+    """(symbol id, relation) for each symbol an event is linked to."""
+    rows = conn.execute("SELECT symbol_id, relation FROM event_links WHERE event_id = ? ORDER BY symbol_id, relation",
+                        (event_id,))
+    return [(row[0], row[1]) for row in rows]
+
+
+def symbols_linked_to(conn: sqlite3.Connection, event_id: str) -> list[str]:
+    """Qualified names of the symbols an event is about."""
+    rows = conn.execute(
+        """SELECT DISTINCT s.qualified_name FROM event_links l JOIN symbols s ON s.id = l.symbol_id
+           WHERE l.event_id = ? ORDER BY s.qualified_name""",
+        (event_id,),
+    )
+    return [row[0] for row in rows]
 
 
 def get_event(conn: sqlite3.Connection, event_id: str) -> Event | None:

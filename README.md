@@ -59,7 +59,7 @@ why("app.models.TaskFile")
 
 Each event is linked to the **functions, methods and classes** it is about, and
 those links follow the code through history. whyfence indexes every Python,
-JavaScript and TypeScript symbol at every commit and keeps its identity when it
+JavaScript, TypeScript, Go, Rust and Java symbol at every commit and keeps its identity when it
 is renamed, moved to another file, or renamed and edited in the same commit.
 
 ---
@@ -138,7 +138,10 @@ sessions, and it rebuilds symbol history automatically if history was rewritten.
 
 ## Temporal memory over MCP
 
-`whyfence mcp` serves two read-only tools:
+`whyfence mcp` serves three read-only tools:
+
+**`rules()`**: every standing rule recorded for the repository ("never call X from
+Y", "must use Z"). The server tells agents to load these at session start.
 
 **`why(symbol_name)`**: everything recorded about why a symbol is the way it is,
 newest first, each with its source (commit or session) and how confident the
@@ -173,6 +176,7 @@ The same answers are available from the command line, for you or for scripts:
 $ whyfence why refresh              # readable summary
 $ whyfence history app.auth.refresh
 $ whyfence why refresh --json       # exactly what the MCP tool returns
+$ whyfence rules                    # every standing rule for this repository
 ```
 
 The server tells agents to call `why` before changing code that looks wrong or
@@ -259,9 +263,27 @@ transcripts ─────┘
 
 Everything stays in `.whyfence/index.db` inside your repository, which you can
 gitignore and delete at any time; it is rebuilt from history. Transcripts are read
-from `~/.claude/projects` for sessions in, under or above the repository
+from `~/.claude/projects`, `~/.codex` and `~/.gemini` for sessions in, under or above the repository
 (`--no-transcripts` to skip them). Obvious secrets (API keys, tokens) are redacted
-before anything is stored. whyfence makes no network calls.
+before anything is stored. whyfence makes no network calls, and nothing reaches your
+repository unless you run `whyfence share`.
+
+## Team memory
+
+```console
+$ whyfence share --dry-run          # see exactly what would be shared
+$ whyfence share                    # append it to .whyfence/events/<you>.jsonl
+```
+
+Review the file and commit it like any other. When teammates pull and run
+`whyfence ingest`, your rules, corrections and dead ends appear in their `why` and
+`rules`, linked to the same functions. Each person has their own file, so merges
+don't conflict.
+
+`share` is always a deliberate step and publishes as little as it can: one sentence
+per event, never the session text. Commit-based events aren't exported, because
+everyone derives those from git. Anything in that file reaches your teammates'
+agents, so treat a change to it like a change to `CLAUDE.md` in code review.
 
 ## Status and roadmap
 
@@ -269,13 +291,13 @@ whyfence is an early MVP. It works end to end, but its extraction heuristics hav
 only been tuned on a handful of real projects.
 
 - [x] Stale-context linter for `CLAUDE.md` / `AGENTS.md`
-- [x] Symbol history with rename and move tracking (Python, JavaScript, TypeScript)
+- [x] Symbol history with rename and move tracking (Python, JavaScript, TypeScript, Go, Rust, Java)
 - [x] Events from commit messages and Claude Code transcripts
-- [x] MCP server: `why`, `history`
-- [ ] Team memory: a shared, append-only event log committed to the repo
-- [ ] More agents' transcripts (Codex, Cursor, Gemini CLI)
-- [ ] More languages (Go, Rust, Java)
-- [ ] A `rules` tool that serves every standing constraint at session start
+- [x] MCP server: `why`, `history`, `rules`
+- [x] Team memory: a shared, append-only event log committed to the repo
+- [x] Gemini CLI sessions
+- [ ] Codex CLI sessions (a reader is included but experimental: built from third-party
+      descriptions of an undocumented format and not yet tested against a real session)
 
 ## Development
 

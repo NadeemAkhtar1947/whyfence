@@ -37,6 +37,7 @@ LANGUAGES = {
     ".py": "python", ".pyi": "python",
     ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".jsx": "javascript",
     ".ts": "typescript", ".mts": "typescript", ".cts": "typescript", ".tsx": "tsx",
+    ".go": "go", ".rs": "rust", ".java": "java",
 }
 MAX_FILE_BYTES = 1_000_000  # larger sources are almost always generated or minified
 MINIFIED_MIN_BYTES = 5_000  # with a mean line this long (characters), the file is a bundle
@@ -101,6 +102,18 @@ def _grammar(language: str):
         import tree_sitter_javascript
 
         return tree_sitter_javascript.language()
+    if language == "go":
+        import tree_sitter_go
+
+        return tree_sitter_go.language()
+    if language == "rust":
+        import tree_sitter_rust
+
+        return tree_sitter_rust.language()
+    if language == "java":
+        import tree_sitter_java
+
+        return tree_sitter_java.language()
     import tree_sitter_typescript
 
     return tree_sitter_typescript.language_tsx() if language == "tsx" else tree_sitter_typescript.language_typescript()
@@ -128,32 +141,85 @@ _JS_DEFINITIONS = {
 _JS_BINDINGS = {"variable_declarator", "public_field_definition", "field_definition"}
 _JS_FUNCTION_VALUES = {"arrow_function", "function_expression", "function", "generator_function"}
 _JS_CLASS_VALUES = {"class"}
+_RUST_TYPES = {"struct_item", "enum_item", "union_item", "trait_item"}
+_JAVA_DEFINITIONS = {
+    "class_declaration": "class",
+    "interface_declaration": "class",
+    "enum_declaration": "class",
+    "record_declaration": "class",
+    "annotation_type_declaration": "class",
+    "method_declaration": "method",
+    "constructor_declaration": "method",
+    "compact_constructor_declaration": "method",
+}
 _TOKEN_RE = re.compile(r"\w+|[^\w\s]")
 
 
-def _definition(node, in_class: bool, python: bool):
-    """(name node, kind) if `node` defines a named function or class, else None."""
-    if python:
+def _type_name(node, source: bytes) -> str:
+    """The type a Go receiver or Rust impl is for: `(s *S)`, `B[T]`, `a::Foo<X>` -> S, B, Foo."""
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type == "type_identifier":
+            node = current
+            break
+        stack.extend(reversed(current.named_children))
+    return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+
+
+def _definition(node, in_class: bool, language: str, source: bytes):
+    """(name node, kind, owner type or None) if `node` defines a named function or class, else None."""
+    if language == "python":
         kind = _PY_DEFINITIONS.get(node.type)
         if kind is None:
             return None
-        return node.child_by_field_name("name"), "method" if kind == "function" and in_class else kind
+        return node.child_by_field_name("name"), "method" if kind == "function" and in_class else kind, None
+
+    name = node.child_by_field_name("name")
+    if language == "go":
+        if node.type == "function_declaration":
+            return name, "function", None
+        if node.type == "method_declaration":  # `func (s *S) Get()` belongs to S, wherever it's written
+            return name, "method", _type_name(node.child_by_field_name("receiver"), source)
+        if node.type == "type_spec" and node.child_by_field_name("type").type in ("struct_type", "interface_type"):
+            return name, "class", None
+        return None
+    if language == "rust":
+        if node.type == "function_item":
+            return name, "method" if in_class else "function", None
+        return (name, "class", None) if node.type in _RUST_TYPES else None
+    if language == "java":
+        kind = _JAVA_DEFINITIONS.get(node.type)
+        if kind is None or (node.type == "method_declaration" and node.child_by_field_name("body") is None):
+            return None  # bodiless interface methods have no code to track
+        return name, kind, None
 
     if node.type in _JS_DEFINITIONS:
         if node.type == "method_definition" and not in_class:
             return None  # object-literal methods aren't addressable symbols
-        name = node.child_by_field_name("name")
         kind = _JS_DEFINITIONS[node.type]
-        return (name, kind) if name is not None else None
+        return (name, kind, None) if name is not None else None
     if node.type in _JS_BINDINGS:
-        name = node.child_by_field_name("name") or node.child_by_field_name("property")
+        name = name or node.child_by_field_name("property")
         value = node.child_by_field_name("value")
         if name is None or value is None:
             return None
         if value.type in _JS_FUNCTION_VALUES:
-            return name, "method" if in_class else "function"
+            return name, "method" if in_class else "function", None
         if value.type in _JS_CLASS_VALUES:
-            return name, "class"
+            return name, "class", None
+    return None
+
+
+def _scope_only(node, language: str, source: bytes) -> tuple[str, bool] | None:
+    """(scope name, holds methods) for Rust's `impl` and `mod`: they name a scope but aren't symbols."""
+    if language != "rust" or node.child_by_field_name("body") is None:
+        return None
+    if node.type == "impl_item":
+        return _type_name(node.child_by_field_name("type"), source), True
+    if node.type == "mod_item":
+        name = node.child_by_field_name("name")
+        return source[name.start_byte:name.end_byte].decode("utf-8", errors="replace"), False
     return None
 
 
@@ -190,13 +256,18 @@ def extract_symbols(path: str, source: bytes) -> list[ParsedSymbol]:
 
     def visit(node, scope: tuple[str, ...], in_class: bool) -> None:
         for child in node.named_children:
-            definition = _definition(child, in_class, python)
+            named_scope = _scope_only(child, language, source)
+            if named_scope is not None:
+                visit(child, (*scope, named_scope[0]), named_scope[1])
+                continue
+            definition = _definition(child, in_class, language, source)
             if definition is None:
                 # Descend through exports, decorators, blocks and conditionals,
                 # keeping class context (a class body's `if` still holds methods).
                 visit(child, scope, in_class and child.type not in ("function_definition",))
                 continue
-            name_node, kind = definition
+            name_node, kind, owner = definition
+            own_scope = (*scope, owner) if owner else scope
             name = source[name_node.start_byte:name_node.end_byte].decode("utf-8", errors="replace")
             # The definition with its own name cut out: renames keep the fingerprint.
             text = (source[child.start_byte:name_node.start_byte] + source[name_node.end_byte:child.end_byte]
@@ -205,7 +276,7 @@ def extract_symbols(path: str, source: bytes) -> list[ParsedSymbol]:
                 text = _trim_trailing_comments(text)
             normalized = " ".join(text.split())
             family = "class" if kind == "class" else "function"
-            local_name = ".".join((*scope, name))
+            local_name = ".".join((*own_scope, name))
             found.append(ParsedSymbol(
                 local_name=local_name,
                 kind=kind,
@@ -214,7 +285,7 @@ def extract_symbols(path: str, source: bytes) -> list[ParsedSymbol]:
                 fingerprint=hashlib.sha256(f"{family}\0{normalized}".encode()).hexdigest()[:32],
                 tokens=tuple(_TOKEN_RE.findall(normalized)),
             ))
-            visit(child, (*scope, name), kind == "class")
+            visit(child, (*own_scope, name), kind == "class")
 
     visit(tree.root_node, (), False)
     return found

@@ -16,26 +16,34 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from whyfence import store
-from whyfence.queries import DETAIL_LIMIT, lookup_history, lookup_why  # noqa: F401  (re-exported)
+from whyfence.queries import DETAIL_LIMIT, lookup_history, lookup_rules, lookup_why  # noqa: F401  (re-exported)
 
 INSTRUCTIONS = """\
-whyfence remembers why code is the way it is. Before changing, deleting or
-"simplifying" a function or class that looks odd, call `why` to see the
-decisions, dead ends and corrections recorded against it, and `history` to see
-how it evolved. Respect recorded constraints, and don't retry a known dead end
-without new information."""
+whyfence remembers why code is the way it is. At the start of a session, call
+`rules` once to load the standing rules for this repository. Before changing,
+deleting or "simplifying" a function or class that looks odd, call `why` to see
+the decisions, dead ends and corrections recorded against it, and `history` to
+see how it evolved. Respect recorded constraints, and don't retry a known dead
+end without new information."""
 
 
 def create_server(db_path: Path) -> MCPServer:
     server = MCPServer("whyfence", instructions=INSTRUCTIONS)
 
-    def query(lookup, symbol_name: str) -> dict[str, Any]:
+    def query(lookup, *args: str) -> dict[str, Any]:
         if not db_path.is_file():
             raise ToolError(f"No whyfence index at {db_path}. Run `whyfence ingest` in the repository first.")
         with closing(store.connect(db_path)) as conn:
-            return lookup(conn, symbol_name)
+            return lookup(conn, *args)
 
     read_only = ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False)
+
+    @server.tool(annotations=read_only)
+    def rules() -> dict[str, Any]:
+        """Every standing rule recorded for this repository ("never call X from Y",
+        "must use Z"), newest first. Call this once at the start of a session.
+        """
+        return query(lookup_rules)
 
     @server.tool(annotations=read_only)
     def history(symbol_name: str) -> dict[str, Any]:

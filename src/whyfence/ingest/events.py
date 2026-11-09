@@ -1,4 +1,4 @@
-"""Mine "why" events from commit messages and Claude Code transcripts, and link them to symbols.
+"""Mine "why" events from commit messages and agent session logs, and link them to symbols.
 
 Commit messages give reverts, fixes and stated rationale. Transcripts give the
 two things git never records: a user correcting the agent ("No, don't retry
@@ -24,13 +24,15 @@ import os
 import re
 import sqlite3
 from collections import defaultdict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Iterator
 
 from whyfence import store
-from whyfence.ingest import git
+from whyfence.ingest import agent_logs, git
+from whyfence.ingest.agent_logs import AgentSession, parse_timestamp as _parse_timestamp
+from whyfence.ingest.agent_logs import Turn as _Turn
 from whyfence.ingest.symbols import extract_symbols, language_for, module_name
 from whyfence.store import Commit, Event, Source
 
@@ -170,7 +172,7 @@ _INJECTED_TAGS = {
 _TAG_BLOCK_RE = re.compile(r"<([A-Za-z][\w-]*)\b[^>]*>(.*?)</\1\b[^>]*>", re.S)
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _PATH_RE = re.compile(
-    r"(?<![\w/\\.:-])((?:[A-Za-z]:)?[/\\]?(?:[\w.-]+[/\\])*[\w.-]+\.(?:py|pyi|js|jsx|mjs|cjs|ts|tsx|mts|cts))\b"
+    r"(?<![\w/\\.:-])((?:[A-Za-z]:)?[/\\]?(?:[\w.-]+[/\\])*[\w.-]+\.(?:py|pyi|js|jsx|mjs|cjs|ts|tsx|mts|cts|go|rs|java))\b"
 )
 _NAMED_SYMBOL_RE = re.compile(r"`([A-Za-z_$][\w$.]*)(?:\(\))?`|\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\(\)")
 _SECRET_RE = re.compile(
@@ -215,29 +217,6 @@ def transcript_files(projects_dir: Path, repo: Path) -> list[Path]:
         if related:
             files.extend(sorted(folder.glob("*.jsonl")))
     return files
-
-
-@dataclass
-class _Turn:
-    """One user or assistant message in a session."""
-
-    role: str
-    uuid: str
-    cwd: str | None
-    timestamp: datetime | None
-    text: str
-    edits: list[tuple[str, str]] = field(default_factory=list)  # (path as written, new text)
-    touched: list[str] = field(default_factory=list)  # paths read or edited
-
-
-def _parse_timestamp(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _strip_injected(text: str) -> str:
@@ -531,10 +510,10 @@ def _session_links(linker: _Linker, turns: list[_Turn], index: int, kind: str,
     return {(sid, "about") for sid in _focus(located, named)}
 
 
-def _ingest_session(conn: sqlite3.Connection, path: Path, linker: _Linker, result: EventIngestResult) -> bool:
-    """Store the events of one transcript; True if any were new."""
-    turns = list(read_session(path))
-    session_id = path.stem
+def _ingest_session(conn: sqlite3.Connection, session: AgentSession, linker: _Linker,
+                    result: EventIngestResult) -> bool:
+    """Store the events of one agent session; True if any were new."""
+    turns, session_id = session.turns, session.session_id
     in_repo = any(t.cwd and linker.resolve_path(".", t.cwd) is not None for t in turns)
     captured_at = next((t.timestamp for t in turns if t.timestamp), None) or datetime.now(timezone.utc)
     added = False
@@ -560,23 +539,39 @@ def _ingest_session(conn: sqlite3.Connection, path: Path, linker: _Linker, resul
                 id=_event_id("transcript", session_id, turn.uuid, finding.kind),
             )
             with store.batch(conn):
-                store.insert_source(conn, Source(f"transcript:{session_id}", "transcript", agent="claude-code",
-                                                 uri=str(path), captured_at=captured_at))
+                store.insert_source(conn, Source(f"transcript:{session_id}", "transcript", agent=session.agent,
+                                                 uri=session.uri, captured_at=captured_at))
                 if _store_event(conn, event, links, result):
                     result.transcript_events += 1
                     added = True
     return added
 
 
+def _sessions(root: Path, projects_dir: Path | None, codex_dir: Path | None,
+              gemini_dir: Path | None) -> Iterator[AgentSession]:
+    # Naming any log location means "only these"; naming none means every agent's default.
+    defaults = projects_dir is None and codex_dir is None and gemini_dir is None
+    if defaults:
+        projects_dir, codex_dir, gemini_dir = claude_projects_dir(), agent_logs.codex_home(), agent_logs.gemini_home()
+    if projects_dir is not None:
+        for path in transcript_files(projects_dir, root):
+            yield AgentSession("claude-code", path.stem, str(path), list(read_session(path)))
+    if codex_dir is not None:
+        yield from agent_logs.codex_sessions(codex_dir, root)
+    if gemini_dir is not None:
+        yield from agent_logs.gemini_sessions(gemini_dir, root)
+
+
 def ingest_events(conn: sqlite3.Connection, repo: Path | str = ".", *,
-                  projects_dir: Path | None = None, transcripts: bool = True) -> EventIngestResult:
-    """Mine commits already in the index, then Claude Code transcripts for this repository."""
+                  projects_dir: Path | None = None, codex_dir: Path | None = None, gemini_dir: Path | None = None,
+                  transcripts: bool = True) -> EventIngestResult:
+    """Mine commits already in the index, then agent session logs for this repository."""
     result = EventIngestResult()
     root = git.repo_root(repo)
     with git.BlobReader(root) as blobs:
         linker = _Linker(conn, root, blobs)
         ingest_commit_events(conn, linker, result)
         if transcripts:
-            for path in transcript_files(projects_dir or claude_projects_dir(), root):
-                result.sessions += _ingest_session(conn, path, linker, result)
+            for session in _sessions(root, projects_dir, codex_dir, gemini_dir):
+                result.sessions += _ingest_session(conn, session, linker, result)
     return result

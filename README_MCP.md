@@ -1,18 +1,19 @@
 # Connecting whyfence to Claude
 
-`whyfence mcp` runs an MCP server over stdio with two read-only tools:
+`whyfence mcp` runs an MCP server over stdio with three read-only tools:
 
 | Tool | Returns |
 |---|---|
+| `rules()` | Every standing rule recorded for the repository, newest first. Agents are told to load these at session start |
 | `why(symbol_name)` | Decisions, dead ends, corrections, constraints, reverts and incidents recorded against a function or class, newest first |
 | `history(symbol_name)` | Each recorded version of the symbol, with the commit that introduced it (`valid_from`) and the commit that replaced it (`valid_to`) |
 
 `symbol_name` can be a qualified name (`app.auth.refresh`), a bare name (`refresh`) or a
 symbol id. If a bare name matches several symbols, the tool returns the candidates.
 
-> **What feeds the tools:** `whyfence ingest` indexes every Python, JavaScript and
-> TypeScript function and class across git history (`history`), and mines commit
-> messages and Claude Code transcripts for reverts, fixes, decisions, corrections and
+> **What feeds the tools:** `whyfence ingest` indexes every Python, JavaScript,
+> TypeScript, Go, Rust and Java function and class across git history (`history`), and mines commit
+> messages and agent session logs for reverts, fixes, decisions, corrections and
 > dead ends (`why`). Re-run it to pick up new commits and sessions.
 
 ## 1. Build the index
@@ -24,7 +25,8 @@ $ pip install whyfence
 $ whyfence ingest
 ```
 
-This writes `.whyfence/index.db`. Add `.whyfence/` to that repository's `.gitignore`.
+This writes `.whyfence/index.db`. Add `.whyfence/*.db*` to that repository's `.gitignore`, so the index stays local but
+shared events in `.whyfence/events/` can be committed.
 
 ## 2a. Claude Code
 

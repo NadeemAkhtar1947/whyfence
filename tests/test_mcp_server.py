@@ -129,7 +129,7 @@ def test_stdio_server_end_to_end(db_path):
         ("history", {"symbol_name": "app.auth.refresh"}),
     ])
     by_name = {tool.name: tool for tool in tools.tools}
-    assert set(by_name) == {"why", "history"}
+    assert set(by_name) == {"why", "history", "rules"}
     assert by_name["why"].annotations.read_only_hint is True
     assert by_name["history"].input_schema["required"] == ["symbol_name"]
 

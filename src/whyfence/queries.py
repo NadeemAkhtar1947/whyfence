@@ -69,6 +69,29 @@ def lookup_history(conn: sqlite3.Connection, symbol_name: str) -> dict[str, Any]
     return {"status": "ok", "symbol": _symbol(symbol), "versions": versions}
 
 
+def lookup_rules(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Every standing rule recorded for this repository, newest first, without repeats."""
+    rules: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for event in store.events_between(conn, kinds=["constraint"]):
+        key = " ".join(event.summary.lower().split())
+        if key in seen:
+            continue
+        seen.add(key)
+        source = store.get_source(conn, event.source_id) if event.source_id else None
+        rules.append({
+            "rule": event.summary,
+            "about": store.symbols_linked_to(conn, event.id),
+            "confidence": event.confidence,
+            "recorded_at": store.to_timestamp(event.recorded_at),
+            "source": {"kind": source.kind, "agent": source.agent} if source else None,
+        })
+    result: dict[str, Any] = {"status": "ok", "rules": rules}
+    if not rules:
+        result["message"] = "No standing rules have been recorded for this repository."
+    return result
+
+
 def lookup_why(conn: sqlite3.Connection, symbol_name: str) -> dict[str, Any]:
     symbol = _resolve(conn, symbol_name)
     if isinstance(symbol, dict):
