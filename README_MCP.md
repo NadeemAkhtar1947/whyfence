@@ -20,7 +20,8 @@ symbol id. If a bare name matches several symbols, the tool returns the candidat
 In the repository you want Claude to ask about:
 
 ```console
-$ uv run --project /path/to/whyfence whyfence ingest
+$ pip install whyfence
+$ whyfence ingest
 ```
 
 This writes `.whyfence/index.db`. Add `.whyfence/` to that repository's `.gitignore`.
@@ -34,8 +35,8 @@ Create `.mcp.json` in the root of your repository:
   "mcpServers": {
     "whyfence": {
       "type": "stdio",
-      "command": "uv",
-      "args": ["run", "--project", "/path/to/whyfence", "whyfence", "mcp"]
+      "command": "uvx",
+      "args": ["whyfence", "mcp"]
     }
   }
 }
@@ -44,7 +45,7 @@ Create `.mcp.json` in the root of your repository:
 Or add the same server from the command line:
 
 ```console
-$ claude mcp add whyfence --scope project -- uv run --project /path/to/whyfence whyfence mcp
+$ claude mcp add whyfence --scope project -- uvx whyfence mcp
 ```
 
 Claude Code starts the server in your repository, so it serves `./.whyfence/index.db`.
@@ -64,11 +65,8 @@ Add `whyfence` under `mcpServers`:
 {
   "mcpServers": {
     "whyfence": {
-      "command": "uv",
-      "args": [
-        "run", "--project", "/path/to/whyfence",
-        "whyfence", "mcp", "--repo", "/path/to/your-repo"
-      ]
+      "command": "uvx",
+      "args": ["whyfence", "mcp", "--repo", "/path/to/your-repo"]
     }
   }
 }
@@ -78,13 +76,14 @@ Restart Claude Desktop afterwards.
 
 ## Paths and troubleshooting
 
-- **Replace both placeholders**: `/path/to/whyfence` is this checkout; `/path/to/your-repo`
-  is the repository you indexed.
-- **Windows paths** in JSON need forward slashes (`C:/Users/me/code/whyfence`) or doubled
-  backslashes (`C:\\Users\\me\\code\\whyfence`).
-- **`uv` not found**: apps launched from the GUI may not see your shell's `PATH`. Use the
-  full path to the executable as `command`. Find it with `which uv` (macOS/Linux) or
-  `where uv` (Windows).
+- **`/path/to/your-repo`** is the repository you indexed.
+- **Windows paths** in JSON need forward slashes (`C:/Users/me/code/my-repo`) or doubled
+  backslashes (`C:\\Users\\me\\code\\my-repo`).
+- **Without uv**: the configs use `uvx`, which runs whyfence from PyPI. If you installed
+  with `pip`, use `"command": "whyfence"` and drop `"whyfence"` from the start of `args`.
+- **`uvx` or `whyfence` not found**: apps launched from the GUI may not see your shell's
+  `PATH`. Use the full path to the executable as `command`. Find it with `which uvx`
+  (macOS/Linux) or `where uvx` (Windows).
 - **`No whyfence index at …`**: the server found no database. Run step 1, or point the
   server at one with `--db /path/to/index.db`.
 - The server only reads the index, so it is safe to leave connected while

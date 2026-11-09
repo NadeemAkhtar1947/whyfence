@@ -79,36 +79,51 @@ a temp folder, then runs `whyfence lint`, `whyfence ingest`, `whyfence why` and
 
 ```text
 app.tokens.refresh  function · python
-constraint  2026-02-10  From now on, never call `refresh` from the request path; the background renewer owns it.
-dead_end    2026-02-10  I see the issue now: retrying here stacked on top of the client's retries. I'll revert the loop.
-correction  2026-02-10  No, don't retry inside refresh(). The HTTP client already retries, so this doubles every request.
+constraint  2026-02-10  From now on, never call `refresh` from the request
+                        path; the background renewer owns it.
+                        transcript · claude-code · inferred
+dead_end    2026-02-10  I see the issue now: retrying here stacked on top of
+                        the client's retries. I'll revert the loop.
+                        transcript · claude-code · inferred
+correction  2026-02-10  No, don't retry inside refresh(). The HTTP client
+                        already retries, so this doubles every request.
+                        transcript · claude-code · inferred
 incident    2026-02-03  fix: refresh tokens before they expire
+                        commit c69facf
 ```
 
 ---
 
 ## Quick start
 
-whyfence is alpha. Install from source with [uv](https://docs.astral.sh/uv/):
+whyfence is alpha and needs Python 3.12 or newer.
 
 ```console
-$ git clone https://github.com/NadeemAkhtar1947/whyfence && cd whyfence
-$ uv sync
-$ uv run whyfence ingest /path/to/your/repo        # example output
-Read 412 commits from your-repo: 412 new, 412 indexed in /path/to/your/repo/.whyfence/index.db
-Walked 412 commits: 1509 new symbols, 2210 versions, 37 renamed or moved, 88 deleted · 1421 symbols indexed
-Found 19 events in commit messages and 11 events in 4 Claude Code sessions, with 41 symbol links
+$ pip install whyfence
+$ whyfence ingest /path/to/your/repo
 ```
 
-Then connect your agent. For Claude Code, add `.mcp.json` to your repository:
+On the small repository `demo.sh` builds, that prints:
+
+```text
+Read 3 commits from demo-app: 3 new, 3 indexed in demo-app/.whyfence/index.db
+Walked 3 commits: 2 new symbols, 5 versions, 2 renamed or moved, 0 deleted
+· 2 symbols indexed
+Found 1 event in commit messages and 3 events in 1 Claude Code session,
+with 4 symbol links
+```
+
+Then connect your agent. For Claude Code, add `.mcp.json` to your repository
+(this uses [uvx](https://docs.astral.sh/uv/); with a plain `pip install`, use
+`"command": "whyfence", "args": ["mcp"]` instead):
 
 ```json
 {
   "mcpServers": {
     "whyfence": {
       "type": "stdio",
-      "command": "uv",
-      "args": ["run", "--project", "/path/to/whyfence", "whyfence", "mcp"]
+      "command": "uvx",
+      "args": ["whyfence", "mcp"]
     }
   }
 }
@@ -136,10 +151,15 @@ introduced it, the commit that replaced it, and its name, file and lines at the 
 {
   "symbol": {"name": "app.tokens.refresh_token", "kind": "function"},
   "versions": [
-    {"name": "app.auth.refresh",          "file": "app/auth.py",    "valid_from": {"sha": "3f1c…", "subject": "add auth"}},
-    {"name": "app.session.refresh",       "file": "app/session.py", "valid_from": {"sha": "9ab2…", "subject": "rename the file"}},
-    {"name": "app.tokens.refresh",        "file": "app/tokens.py",  "valid_from": {"sha": "c47e…", "subject": "move refresh to its own module"}},
-    {"name": "app.tokens.refresh_token",  "file": "app/tokens.py",  "valid_from": {"sha": "e810…", "subject": "rename and edit at once"}, "current": true}
+    {"name": "app.auth.refresh", "file": "app/auth.py",
+     "valid_from": {"sha": "3f1c…", "subject": "add auth"}},
+    {"name": "app.session.refresh", "file": "app/session.py",
+     "valid_from": {"sha": "9ab2…", "subject": "rename the file"}},
+    {"name": "app.tokens.refresh", "file": "app/tokens.py",
+     "valid_from": {"sha": "c47e…", "subject": "move refresh to its own module"}},
+    {"name": "app.tokens.refresh_token", "file": "app/tokens.py",
+     "valid_from": {"sha": "e810…", "subject": "rename and edit at once"},
+     "current": true}
   ]
 }
 ```
@@ -260,6 +280,7 @@ only been tuned on a handful of real projects.
 ## Development
 
 ```console
+$ git clone https://github.com/NadeemAkhtar1947/whyfence && cd whyfence
 $ uv sync
 $ uv run pytest
 ```
