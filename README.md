@@ -55,7 +55,7 @@ why("app.models.TaskFile")
 | `correction` | You pushing back on the agent | "No, don't retry inside `refresh()`; the HTTP client already retries" |
 | `dead_end` | The agent realizing an approach was wrong | "Turns out `celery.current_app` is a lazy proxy, so patching it doesn't stick" |
 | `incident` | `fix:` commits, "Fixes #12", bugs, crashes | "fix: refresh tokens before they expire" |
-| `revert` | `Revert "…"`, "This reverts commit …" | |
+| `revert` | Commit subjects like `Revert "…"` | |
 
 Each event is linked to the **functions, methods and classes** it is about, and
 those links follow the code through history. whyfence indexes every Python,

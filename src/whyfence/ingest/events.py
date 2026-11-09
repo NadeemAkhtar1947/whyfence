@@ -45,17 +45,19 @@ CORRECTION_ANYWHERE_LIMIT = 300  # long messages are instructions; only short on
 # Commit messages
 # --------------------------------------------------------------------------- #
 
-_REVERT_RE = re.compile(r'^Revert "|^revert(?:\([^)]*\))?!?:|^This reverts commit [0-9a-f]{7,40}', re.I | re.M)
+# Subject only: a squash merge's body lists every commit on the branch, reverts included.
+_REVERT_RE = re.compile(r'^Revert "|^revert(?:\([^)]*\))?!?:', re.I)
 _CONVENTIONAL_RE = re.compile(r"^([A-Za-z]+)(?:\([^)]*\))?!?:")
 _FIX_TYPES = {"fix", "bugfix", "hotfix"}
-_FIX_RE = re.compile(
-    r"^fix(?:e[sd])?\b|\b(?:fix(?:es|ed)?|resolves?|closes?)\s+#\d+|\bbugs?\b|\bregression\b|\bcrash(?:es|ed|ing)?\b",
-    re.I | re.M,
-)
+_FIX_SUBJECT_RE = re.compile(r"^fix(?:e[sd])?\b|\bbugs?\b|\bregression\b|\bcrash(?:es|ed|ing)?\b", re.I)
+_FIXES_ISSUE_RE = re.compile(r"\bfix(?:es|ed)?\s+#\d+", re.I)
+# Correcting prose isn't an incident anyone needs to know about before changing the code.
+_TRIVIAL_FIX_RE = re.compile(r"\b(?:typos?|spelling|grammar|docs?|documentation|readme|changelog)\b", re.I)
+_BULLET_RE = re.compile(r"^\s*[-*•]\s")
 _RATIONALE_HEADER_RE = re.compile(r"^\s*(?:why|rationale|reason|motivation)\s*:", re.I | re.M)
 # "why" alone is usually a noun ("the why tool"); only rationale phrasing counts.
 _RATIONALE_RE = re.compile(
-    r"\b(?:that'?s|this is|which is|here'?s) why\b|\bbecause\b|\bso that\b|\binstead of\b|\bin order to\b|"
+    r"\b(?:that'?s|this is|which is|here'?s) why\b|\bbecause\b|\bso that\b|\bin order to\b|"
     r"\bwe (?:chose|decided|opted)\b|\bdecided to\b",
     re.I,
 )
@@ -67,24 +69,31 @@ class CommitFinding:
     confidence: str
 
 
+def _prose(message: str) -> str:
+    """A commit message without bullet lines, which list changes rather than explain them."""
+    return "\n".join(line for line in message.splitlines() if not _BULLET_RE.match(line))
+
+
 def classify_commit(message: str) -> CommitFinding | None:
     """What a commit message says about why code changed, if anything."""
     subject = message.split("\n", 1)[0]
     if subject.startswith("Merge "):
         return None  # merge commits describe branches, not code
-    if _REVERT_RE.search(message):
+    if _REVERT_RE.search(subject):
         return CommitFinding("revert", "EXTRACTED")
     conventional = _CONVENTIONAL_RE.match(subject)
     commit_type = conventional.group(1).lower() if conventional else None
-    if commit_type in _FIX_TYPES:
+    trivial = _TRIVIAL_FIX_RE.search(subject) is not None
+    if commit_type in _FIX_TYPES and not trivial:
         return CommitFinding("incident", "EXTRACTED")
     # A typed subject (feat:, docs:, ...) says what the commit is; a body that
     # mentions a bug or crash is context, not a fix.
-    if commit_type is None and _FIX_RE.search(message):
+    if commit_type is None and not trivial and (_FIX_SUBJECT_RE.search(subject) or _FIXES_ISSUE_RE.search(message)):
         return CommitFinding("incident", "INFERRED")
-    if _RATIONALE_HEADER_RE.search(message):
+    prose = _prose(message)
+    if _RATIONALE_HEADER_RE.search(prose):
         return CommitFinding("decision", "EXTRACTED")
-    if _RATIONALE_RE.search(message):
+    if _RATIONALE_RE.search(prose):
         return CommitFinding("decision", "INFERRED")
     return None
 
@@ -464,7 +473,7 @@ def ingest_commit_events(conn: sqlite3.Connection, linker: _Linker, result: Even
         if finding is not None:
             found.append((_commit_event(commit, finding), _RELATION[finding.kind]))
         _, _, body = commit.message.partition("\n")
-        rule = find_constraint(body)
+        rule = find_constraint(_prose(body))
         if rule is not None:  # "Never call this from the event loop": a standing rule, kept on its own
             constraint = replace(_commit_event(commit, CommitFinding("constraint", "INFERRED")),
                                  summary=_redact(rule), id=_event_id("commit", commit.sha, "constraint"))

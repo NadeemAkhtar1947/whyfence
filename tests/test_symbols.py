@@ -294,6 +294,47 @@ def test_resumes_incrementally_and_rebuilds_after_rewrites(repo):
         assert index(repo, conn).commits == 0
 
 
+@needs_git
+def test_same_named_definitions_on_one_line_get_their_own_ids(repo):
+    # Found on httpx: hundreds of functions named `r` or `e` sharing a line crashed the ingest.
+    repo.commit("add", {"a.js": "function a(){return 1} function a(){return 2}\n"})
+    with closing(store.connect()) as conn:
+        assert index(repo, conn).created == 2
+        assert store.count_symbols(conn) == 2
+
+
+def test_minified_files_are_skipped():
+    bundle = b"function a(){return 1};" * 400
+    assert extract_symbols("docs/js/app.js", bundle) == []
+    assert extract_symbols("vendor.min.js", b"function a(){}") == []
+    # Long lines alone don't make a file minified.
+    source = b"TABLE = '" + b"x" * 8000 + b"'\n" + b"def f():\n    return 1\n" * 200
+    assert extract_symbols("data.py", source)
+
+
+@needs_git
+def test_identical_tiny_bodies_are_not_renames_across_scopes(repo):
+    event = "class Event:\n    def set(self):\n        self.flag = True\n"
+    lock = "class Lock:\n    def release(self):\n        self.flag = True\n"
+    c1 = repo.commit("one", {"a.py": event})
+    c2 = repo.commit("two", {"a.py": lock})
+    with closing(store.connect()) as conn:
+        index(repo, conn)
+        assert timeline(conn, "a.Event.set") == [("a.Event.set", "a.py", 2, c1, c2)]
+        assert timeline(conn, "a.Lock.release") == [("a.Lock.release", "a.py", 2, c2, None)]
+
+
+@needs_git
+def test_tiny_functions_still_follow_renames_in_place_and_moves_by_name(repo):
+    c1 = repo.commit("one", {"a.py": "def close(self):\n    return 1\n"})
+    c2 = repo.commit("rename in place", {"a.py": "def aclose(self):\n    return 1\n"})
+    c3 = repo.commit("move keeping the name", {"a.py": "x = 1\n", "b.py": "def aclose(self):\n    return 1\n"})
+    with closing(store.connect()) as conn:
+        index(repo, conn)
+        assert [(v[0], v[3]) for v in timeline(conn, "b.aclose")] == [
+            ("a.close", c1), ("a.aclose", c2), ("b.aclose", c3)]
+
+
 # --------------------------------------------------------------------------- #
 # End to end: whyfence's own history
 # --------------------------------------------------------------------------- #

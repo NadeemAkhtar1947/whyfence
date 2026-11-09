@@ -22,7 +22,7 @@ import bisect
 import hashlib
 import re
 import sqlite3
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from functools import lru_cache
@@ -39,6 +39,8 @@ LANGUAGES = {
     ".ts": "typescript", ".mts": "typescript", ".cts": "typescript", ".tsx": "tsx",
 }
 MAX_FILE_BYTES = 1_000_000  # larger sources are almost always generated or minified
+MINIFIED_MIN_BYTES = 5_000  # with a mean line this long (characters), the file is a bundle
+MINIFIED_MEAN_LINE = 300
 SIMILARITY = 0.9  # token similarity for "renamed and edited"; at least this, or it's a new symbol
 MIN_FUZZY_TOKENS = 25  # tiny definitions look alike; never fuzzy-match them
 INDEXED_THROUGH = "symbols.indexed_through"  # meta key: last commit whose symbols are indexed
@@ -163,10 +165,17 @@ def _trim_trailing_comments(text: str) -> str:
     return "\n".join(lines)
 
 
+def _looks_minified(path: str, source: bytes) -> bool:
+    """Bundles are full of one-letter functions that mean nothing to anyone asking `why`."""
+    if ".min." in PurePosixPath(path).name.lower():
+        return True
+    return len(source) > MINIFIED_MIN_BYTES and len(source) / (source.count(b"\n") + 1) > MINIFIED_MEAN_LINE
+
+
 def extract_symbols(path: str, source: bytes) -> list[ParsedSymbol]:
     """Every named function, method and class in one file, in source order."""
     language = language_for(path)
-    if language is None or len(source) > MAX_FILE_BYTES:
+    if language is None or len(source) > MAX_FILE_BYTES or _looks_minified(path, source):
         return []
     python = language == "python"
     tree = _parser(language).parse(source)
@@ -297,9 +306,12 @@ def first_parent_changes(repo: Path | str, since: str | None = None) -> Iterator
         yield sha, changes
 
 
-def _new_symbol_id(sha: str, path: str, symbol: ParsedSymbol) -> str:
+def _new_symbol_id(sha: str, path: str, symbol: ParsedSymbol, occurrence: int = 0) -> str:
     # Deterministic, so rebuilding the index keeps ids that shared events refer to.
+    # `occurrence` separates same-named definitions on one line (`function a(){} function a(){}`).
     key = f"{sha}\0{path}\0{symbol.local_name}\0{symbol.start_line}"
+    if occurrence:
+        key += f"\0{occurrence}"
     return hashlib.sha256(key.encode()).hexdigest()[:24]
 
 
@@ -322,8 +334,10 @@ class _Walker:
     def __init__(self, conn: sqlite3.Connection, blobs: git.BlobReader, live: dict[str, list[_Live]],
                  result: SymbolIngestResult) -> None:
         self.conn, self.blobs, self.live, self.result = conn, blobs, live, result
+        self.created_at: Counter[tuple[str, str, str, int]] = Counter()
 
     def apply(self, sha: str, changes: list[Change]) -> None:
+        self.created_at.clear()  # positions only need to be unique within one commit
         old_pool: list[_Live] = []
         new_pool: list[tuple[str, ParsedSymbol]] = []
         matched: list[tuple[_Live, str, ParsedSymbol]] = []
@@ -353,9 +367,10 @@ class _Walker:
             by_fingerprint[(_family(symbol.kind), symbol.fingerprint)].append(symbol)
         unmatched: list[tuple[str, ParsedSymbol]] = []
         for path, symbol in new_pool:
-            same_body = by_fingerprint.get((_family(symbol.kind), symbol.fingerprint))
-            if same_body:
-                old = same_body.pop(0)
+            same_body = by_fingerprint.get((_family(symbol.kind), symbol.fingerprint), [])
+            old = next((o for o in same_body if self._same_body_is_evidence(o, path, symbol)), None)
+            if old is not None:
+                same_body.remove(old)
                 old_pool.remove(old)
                 matched.append((old, path, symbol))
             else:
@@ -375,6 +390,20 @@ class _Walker:
         for old in old_pool:
             store.close_symbol_version(self.conn, old.symbol_id, sha)
             self.result.deleted += 1
+
+    @staticmethod
+    def _same_body_is_evidence(old: _Live, path: str, symbol: ParsedSymbol) -> bool:
+        """Identical long bodies are the same code. Identical one-liners often aren't.
+
+        `def set(self): self._flag = True` in one class and `def release(self): ...` in
+        another can match by coincidence, so a tiny body only proves a rename within
+        the same file and scope, or a move that keeps its name.
+        """
+        if len(symbol.tokens) >= MIN_FUZZY_TOKENS:
+            return True
+        old_scope, _, old_name = old.local_name.rpartition(".")
+        new_scope, _, new_name = symbol.local_name.rpartition(".")
+        return old_name == new_name or (old.path == path and old_scope == new_scope)
 
     @staticmethod
     def _most_similar(symbol: ParsedSymbol, candidates: list[_Live]) -> _Live | None:
@@ -400,7 +429,9 @@ class _Walker:
         self.result.versions += 1
 
     def _create(self, sha: str, path: str, symbol: ParsedSymbol) -> None:
-        symbol_id = _new_symbol_id(sha, path, symbol)
+        position = (sha, path, symbol.local_name, symbol.start_line)
+        symbol_id = _new_symbol_id(sha, path, symbol, self.created_at[position])
+        self.created_at[position] += 1
         store.upsert_symbol(self.conn, Symbol(symbol_id, symbol.kind, qualify(path, symbol.local_name),
                                               symbol_language(path)))
         self._record(sha, symbol_id, path, symbol)

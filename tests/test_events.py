@@ -53,6 +53,13 @@ AUTH_V2 = AUTH_V1.replace("leeway=60", "leeway=120").replace(
     # Found on real history: "why" as a noun, and a feature commit that mentions a crash.
     ("feat: MCP server with why/history tools", None),
     ("feat: symbol indexing\n\nReading Node.start_point crashes on Windows.", None),
+    # Found on httpx: squash-merge bodies list every commit on the branch.
+    ('Remove unused ignore\n\n* Revert "x"\n\nThis reverts commit 1234567abc.', None),
+    ("Rename concurrency to backends\n\n* fix tests\n* a bug in the old name", None),
+    ("Add CLI\n\n* keep it small because it is new", None),
+    ("Fix typo in docstring", None),
+    ("fix: spelling in the README", None),
+    ("Use ruff instead of flake8", None),
     ("Pin tree-sitter\n\nThat's why lines come from byte offsets.", ("decision", "INFERRED")),
 ])
 def test_classify_commit(message, expected):
@@ -138,6 +145,17 @@ def test_compaction_summaries_are_not_user_turns(tmp_path):
         user("2", tmp_path, "2026-02-10T10:00:01Z", "Must use Decimal."),
     ])
     assert [t.uuid for t in read_session(session)] == ["2"]
+
+
+def test_changelog_bullets_are_not_constraints(repo_factory):
+    repo = repo_factory()
+    repo.commit("add", {"m.py": "def send():\n    return 1\n"})
+    repo.commit("Tidy send\n\n* Don't call send on each request", {"m.py": "def send():\n    return 2\n"})
+    with closing(store.connect()) as conn:
+        git.ingest_git(conn, repo.path)
+        symbols.ingest_symbols(conn, repo.path)
+        events.ingest_events(conn, repo.path, transcripts=False)
+        assert store.events_between(conn, kinds=["constraint"]) == []
 
 
 def test_commit_constraints_are_separate_events(repo_factory):
