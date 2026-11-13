@@ -8,7 +8,8 @@
 
 whyfence gives AI coding agents a memory of how your code got the way it is: the
 decisions behind it, the approaches that already failed, the corrections you made,
-and the rules you set. Your agent can check that memory over MCP before it
+and the rules you set. It builds that memory from your git history and your Claude
+Code and Gemini CLI sessions, and your agent checks it over MCP before it
 "simplifies" something that was deliberately written that way.
 
 Local-first. No server, no account, no code leaves your machine.
@@ -96,22 +97,24 @@ incident    2026-02-03  fix: refresh tokens before they expire
 
 ## Quick start
 
-whyfence is alpha and needs Python 3.12 or newer.
+whyfence is alpha and needs Python 3.12 or newer. In your repository:
 
 ```console
 $ pip install whyfence
-$ whyfence ingest /path/to/your/repo
+$ whyfence lint                     # stale commands in CLAUDE.md / AGENTS.md, no setup
+$ whyfence ingest                   # index history and agent sessions (re-run any time)
+$ whyfence history some_function    # every version, through renames and moves
+$ whyfence why some_function        # the decisions, rules and dead ends behind it
+$ whyfence rules                    # every standing rule for the repository
 ```
 
-On the small repository `demo.sh` builds, that prints:
-
-```text
-Read 3 commits from demo-app: 3 new, 3 indexed in demo-app/.whyfence/index.db
-Walked 3 commits: 2 new symbols, 5 versions, 2 renamed or moved, 0 deleted
-· 2 symbols indexed
-Found 1 event in commit messages and 3 events in 1 Claude Code session,
-with 4 symbol links
-```
+**What to expect.** `lint` and `history` are useful on any repository straight
+away. `why` and `rules` are memory: they come from commit messages that explain
+themselves and from your agent sessions, so on a repository with terse commits they
+start out sparse and fill up as you work. Indexing
+[httpx](https://github.com/encode/httpx) (1,415 commits) takes under a minute and
+gives a full history for its 2,356 functions and classes, but only 86 events,
+because its commit messages rarely say why.
 
 Then connect your agent. For Claude Code, add `.mcp.json` to your repository
 (this uses [uvx](https://docs.astral.sh/uv/); with a plain `pip install`, use
@@ -240,8 +243,8 @@ git history ──► commits ──► symbol index (tree-sitter, every commit,
                                 │   identity: name → body fingerprint → token similarity
                                 ▼
 commit messages ─┐         symbol_versions ◄── history()
-Claude Code      ├─► events ──► event_links ◄── why()
-transcripts ─────┘
+agent sessions   ├─► events ──► event_links ◄── why(), rules()
+shared events ───┘
                        SQLite (WAL, FTS5) in .whyfence/index.db
 ```
 
