@@ -14,6 +14,8 @@ Code and Gemini CLI sessions, and your agent checks it over MCP before it
 
 Local-first. No server, no account, no code leaves your machine.
 
+![whyfence lint catching stale CLAUDE.md commands, then whyfence history and whyfence why explaining a function](https://raw.githubusercontent.com/NadeemAkhtar1947/whyfence/main/docs/demo.gif)
+
 ---
 
 ## Chesterton's Fence, for AI agents

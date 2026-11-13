@@ -9,9 +9,15 @@
 # repositories, git config and ~/.claude are never read or touched.
 #
 # Usage: ./demo.sh            (set WHYFENCE="..." to choose how whyfence is run)
+#        ./demo.sh --setup-only DIR   build and index the demo repositories in DIR, then stop
+#                                     (docs/demo.tape uses this to record the README's GIF)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SETUP_DIR=""
+if [ "${1:-}" = "--setup-only" ]; then
+  SETUP_DIR="${2:?usage: demo.sh --setup-only DIR}"
+fi
 
 # How to run whyfence: $WHYFENCE, an installed `whyfence`, or this checkout via uv.
 if [ -n "${WHYFENCE:-}" ]; then
@@ -32,9 +38,19 @@ fi
 # Paths as Python and git see them: C:/... on Windows (Git Bash), symlinks resolved elsewhere.
 native() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s\n' "$1"; fi; }
 
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
-WORK="$(cd "$WORK" && pwd -P)"
+if [ -n "$SETUP_DIR" ]; then
+  # Only ever replace a folder this script made: a mistyped DIR must not be wiped.
+  if [ -e "$SETUP_DIR" ] && [ -n "$(ls -A "$SETUP_DIR")" ] && [ ! -e "$SETUP_DIR/.whyfence-demo" ]; then
+    echo "demo.sh: $SETUP_DIR is not empty and wasn't created by demo.sh; choose another folder." >&2
+    exit 1
+  fi
+  rm -rf "$SETUP_DIR" && mkdir -p "$SETUP_DIR" && touch "$SETUP_DIR/.whyfence-demo"
+  WORK="$(cd "$SETUP_DIR" && pwd -P)"
+else
+  WORK="$(mktemp -d)"
+  trap 'rm -rf "$WORK"' EXIT
+  WORK="$(cd "$WORK" && pwd -P)"
+fi
 
 # Keep the demo's commits independent of your git config (signing, hooks, templates).
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
@@ -64,8 +80,10 @@ make migrate
 ```
 EOF
 
-step "1. whyfence lint: commands in CLAUDE.md that no longer exist" "whyfence lint stale-repo"
-"${WF[@]}" lint "$(native "$STALE")" || true   # exits 1 because it found stale commands
+if [ -z "$SETUP_DIR" ]; then
+  step "1. whyfence lint: commands in CLAUDE.md that no longer exist" "whyfence lint stale-repo"
+  "${WF[@]}" lint "$(native "$STALE")" || true   # exits 1 because it found stale commands
+fi
 
 # --------------------------------------------------------------------------- #
 # 2. A repository with a little history, and a Claude Code session about it
@@ -112,6 +130,11 @@ sed "s|__REPO__|$REPO_NATIVE|g" >"$SESSION_DIR/demo-session.jsonl" <<'EOF'
 {"type":"assistant","uuid":"a2","cwd":"__REPO__","timestamp":"2026-02-10T10:03:00Z","message":{"role":"assistant","content":[{"type":"text","text":"I see the issue now: retrying here stacked on top of the client's retries. I'll revert the loop."},{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"__REPO__/app/tokens.py","old_string":"x","new_string":"    if token.expires_in > leeway:"}}]}}
 {"type":"user","uuid":"u3","cwd":"__REPO__","timestamp":"2026-02-10T10:04:00Z","message":{"role":"user","content":"Thanks. From now on, never call `refresh` from the request path; the background renewer owns it."}}
 EOF
+
+if [ -n "$SETUP_DIR" ]; then
+  "${WF[@]}" ingest "$REPO_NATIVE" --transcripts "$(native "$PROJECTS")" >/dev/null
+  exit 0
+fi
 
 step "2. whyfence ingest: index history, symbols and the session" "whyfence ingest demo-app --transcripts claude-projects"
 "${WF[@]}" ingest "$REPO_NATIVE" --transcripts "$(native "$PROJECTS")"
