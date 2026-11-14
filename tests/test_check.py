@@ -165,3 +165,15 @@ def test_cli_formats_and_fail_on(history, capsys):
     assert main(["check", "main", "--repo", str(history.path), "--fail-on", "incident"]) == 1
     assert main(["check", "main", "--repo", str(history.path), "--format", "markdown"]) == 0
     assert capsys.readouterr().out.count(check.MARKER) == 1
+
+
+def test_excerpt_keeps_prose_and_drops_bullets_with_their_wrapped_lines_and_trailers():
+    body = ("- test_indexes_whyfence_own_history looked symbols up by their current\n"
+            "  name, but lookup_history moved from mcp_server.py to queries.py\n"
+            "- Windows reports NUL as a terminal\n\n"
+            "Co-Authored-By: Claude <noreply@anthropic.com>\n")
+    assert check._excerpt(body) is None  # the commit that produced the first live comment
+    body = ("Why: refreshing after a 401 caused bursts.\n\n"
+            "* fix one\n  more of fix one\n\n"
+            "Signed-off-by: Ada <ada@example.com>\n")
+    assert check._excerpt(body) == "Why: refreshing after a 401 caused bursts."
