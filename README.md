@@ -270,8 +270,9 @@ Everything stays in `.whyfence/index.db` inside your repository, which you can
 gitignore and delete at any time; it is rebuilt from history. Transcripts are read
 from `~/.claude/projects`, `~/.codex` and `~/.gemini` for sessions in, under or above the repository
 (`--no-transcripts` to skip them). Obvious secrets (API keys, tokens) are redacted
-before anything is stored. whyfence makes no network calls, and nothing reaches your
-repository unless you run `whyfence share`.
+before anything is stored. whyfence makes no network calls (the GitHub Action talks
+only to GitHub, to post its comment), and nothing reaches your repository unless you
+run `whyfence share`.
 
 ## Team memory
 
@@ -290,6 +291,50 @@ per event, never the session text. Commit-based events aren't exported, because
 everyone derives those from git. Anything in that file reaches your teammates'
 agents, so treat a change to it like a change to `CLAUDE.md` in code review.
 
+## Pull request checks
+
+`whyfence check BASE` lists the functions and classes a branch changes that have a
+recorded rule, dead end, correction, revert or stated reason, as they stood before
+the branch. Renames and moves are followed, so moving `refresh()` to another file
+and editing it still finds what was recorded about it.
+
+```console
+$ whyfence ingest && whyfence check main
+app.auth.refresh  changed · app/auth.py
+  constraint  Never retry inside refresh(); the HTTP client already retries.  2026-02-10
+```
+
+The GitHub Action runs the same check on every pull request and posts one comment,
+updated on each push, when something is found:
+
+```yaml
+# .github/workflows/whyfence.yml
+name: whyfence
+on: pull_request          # not pull_request_target: the check never needs secrets
+permissions:
+  contents: read
+  pull-requests: write    # to comment
+jobs:
+  fences:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # whyfence reads the whole history
+      - uses: NadeemAkhtar1947/whyfence@v0.3.0
+        # with:
+        #   fail-on: constraint   # fail the check when a rule is touched
+```
+
+**What to expect:** CI has no agent sessions, so the Action knows only what is in
+git: commit messages and the team's `.whyfence/events/`. It stays silent until
+someone has written that down. On httpx, whose commits are terse "Fix X (#123)"
+subjects, it finds nothing across 300 commits (`whyfence check --all` lists those
+weaker signals). It earns its place on teams that write `Why:` in commit messages
+or run `whyfence share`. Pull requests from forks get a read-only token, so for them
+the result goes to the job summary instead of a comment. Repository text in the
+comment is escaped, so it can't mention people or embed links.
+
 ## Status and roadmap
 
 whyfence is an early MVP. It works end to end, but its extraction heuristics have
@@ -301,6 +346,7 @@ only been tuned on a handful of real projects.
 - [x] MCP server: `why`, `history`, `rules`
 - [x] Team memory: a shared, append-only event log committed to the repo
 - [x] Gemini CLI sessions
+- [x] `whyfence check` and a GitHub Action that flags pull requests touching fenced code
 - [ ] Codex CLI sessions (a reader is included but experimental: built from third-party
       descriptions of an undocumented format and not yet tested against a real session)
 

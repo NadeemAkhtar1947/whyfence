@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from contextlib import closing
 from pathlib import Path
 
@@ -185,6 +186,44 @@ def _rules(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check(args: argparse.Namespace) -> int:
+    from whyfence import check
+
+    console = Console(highlight=False)
+    errors = Console(highlight=False, stderr=True)
+    db_path = args.db.resolve() if args.db else _default_db(args.repo)
+    if not db_path.is_file():
+        errors.print(f"[red]error:[/] no whyfence index at {escape(str(db_path))}; run `whyfence ingest` first")
+        return 2
+    try:
+        with closing(store.connect(db_path)) as conn:
+            result = check.check(conn, args.repo, args.base, include_weak=args.all)
+    except (check.CheckError, git.GitError) as exc:
+        errors.print(f"[red]error:[/] {escape(str(exc))}")
+        return 2
+    if args.format in ("json", "markdown"):
+        # Always UTF-8: these go to files and APIs, and Windows would otherwise write cp1252,
+        # turning non-English text and the mention-breaking zero-width space into "?".
+        text = json.dumps(result.to_json(), indent=2, ensure_ascii=False) + "\n" if args.format == "json" \
+            else check.to_markdown(result)
+        sys.stdout.flush()
+        sys.stdout.buffer.write(text.encode("utf-8"))
+        sys.stdout.buffer.flush()
+    elif not result.fences:
+        console.print(f"[grey50]{_plural(result.changed, 'existing symbol')} changed since "
+                      f"{escape(args.base)}; none has a recorded rule, dead end, revert or stated reason.[/]")
+    else:
+        for fence in result.fences:
+            what = "deleted" if fence.deleted else f"renamed to {fence.new_name}" if fence.new_name else "changed"
+            console.print(f"[bold]{escape(fence.name)}[/]  [grey50]{escape(what)} · {escape(fence.file)}[/]")
+            for event in fence.events:
+                console.print(f"  [{_KIND_STYLES.get(event['kind'], '')}]{event['kind']}[/]  "
+                              f"{escape(event['summary'])}  [grey50]{event['recorded_at'][:10]}[/]")
+    if args.fail_on and any(e["kind"] in args.fail_on for f in result.fences for e in f.events):
+        return 1
+    return 0
+
+
 def _mcp(args: argparse.Namespace) -> int:
     from whyfence import mcp_server  # deferred: the MCP stack is slow to import
 
@@ -234,6 +273,21 @@ def main(argv: list[str] | None = None) -> int:
         query.add_argument("--db", type=Path, help=f"database path (default: <repo>/{DEFAULT_DB.as_posix()})")
         query.add_argument("--json", action="store_true", help="print the same JSON the MCP tool returns")
         query.set_defaults(func=func)
+
+    checker = commands.add_parser(
+        "check", help="show what's recorded about the functions a branch or pull request changes",
+        description="Show the decisions, rules and dead ends recorded against every function or class that "
+                    "the first-parent commits in BASE..HEAD changed. Run `whyfence ingest` first.")
+    checker.add_argument("base", help="the branch or commit the change is based on, e.g. main or origin/main")
+    checker.add_argument("--repo", type=Path, default=Path("."), help="repository (default: .)")
+    checker.add_argument("--db", type=Path, help=f"database path (default: <repo>/{DEFAULT_DB.as_posix()})")
+    checker.add_argument("--format", choices=("text", "markdown", "json"), default="text",
+                         help="markdown is what the GitHub Action posts on pull requests")
+    checker.add_argument("--all", action="store_true",
+                         help="also list weak signals, such as old commits whose subject starts with \"Fix\"")
+    checker.add_argument("--fail-on", nargs="+", metavar="KIND", choices=sorted(store.EVENT_KINDS),
+                         help="exit 1 if a changed symbol has an event of one of these kinds, e.g. constraint")
+    checker.set_defaults(func=_check)
 
     mcp = commands.add_parser("mcp", help="serve the why/history tools to MCP clients over stdio")
     mcp.add_argument("--repo", type=Path, default=Path("."),
