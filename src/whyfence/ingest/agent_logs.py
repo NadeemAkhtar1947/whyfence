@@ -35,6 +35,7 @@ class Turn:
     text: str
     edits: list[tuple[str, str]] = field(default_factory=list)  # (path as written, new text)
     touched: list[str] = field(default_factory=list)  # paths read or edited
+    own_text: str | None = None  # the user's own words without pasted text; None when that's all of `text`
 
 
 @dataclass

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from contextlib import closing
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
-from whyfence import linter, store, team
+from whyfence import linter, store, team, trust
 from whyfence.console import harden_streams
 from whyfence.ingest import events, git, symbols
 
@@ -120,27 +121,63 @@ def _symbol_header(console: Console, symbol: dict) -> None:
 def _why(args: argparse.Namespace) -> int:
     from whyfence import queries
 
-    answer, code = _lookup(args, lambda conn: queries.lookup_why(conn, args.symbol))
+    answer, code = _lookup(args, lambda conn: queries.lookup_why(
+        conn, args.symbol, trust.load(args.repo), include_untrusted=args.include_untrusted))
     if answer is None:
         return code
     console = Console(highlight=False)
     _symbol_header(console, answer["symbol"])
     if not answer["events"]:
-        console.print(f"  [grey50]{escape(answer['message'])}[/]")
+        if any(answer.get(key) for key in _LEFT_OUT):
+            _hidden_untrusted(console, answer)
+        else:
+            console.print(f"  [grey50]{escape(answer['message'])}[/]")
         return 0
     table = Table(box=None, show_header=False, padding=(0, 2, 0, 0), pad_edge=False)
     table.add_column(no_wrap=True)
     table.add_column(style="grey50", no_wrap=True)
     table.add_column(overflow="fold")
     for event in answer["events"]:
-        source = event["source"] or {}
-        origin = f"commit {event['commit'][:7]}" if event["commit"] else \
-            " · ".join(filter(None, [source.get("kind"), source.get("agent")]))
         text = Text(event["summary"])
-        text.append(f"\n{origin}" + (" · inferred" if event["confidence"] == "INFERRED" else ""), style="grey50")
+        text.append("\n").append_text(_origin_text(event["origin"], event["confidence"], event["id"]))
         table.add_row(Text(event["kind"], style=_KIND_STYLES.get(event["kind"], "")), event["recorded_at"][:10], text)
     console.print(table)
+    _hidden_untrusted(console, answer)
     return 0
+
+
+def _origin_text(origin: dict, confidence: str | None = None, event_id: str | None = None) -> Text:
+    """"commit 1a2b3c4 · Ada Lovelace", "claude-code session", "shared · .whyfence/events/x.jsonl · Bob"."""
+    author = (origin.get("author") or "").split(" <")[0] or None
+    if origin["kind"] == "commit":
+        parts = [f"commit {(origin.get('commit') or '')[:7]}", author]
+    elif origin["kind"] == "shared":
+        parts = ["shared", origin.get("file"), author or "uncommitted"]
+    elif origin["kind"] == "session":
+        parts = [f"{origin.get('agent') or 'agent'} session"]
+    else:
+        parts = [origin["kind"]]
+    if confidence == "INFERRED":
+        parts.append("inferred")
+    text = Text(" · ".join(filter(None, parts)), style="grey50")
+    if not origin["trusted"]:
+        text.append(" · untrusted author", style="yellow")
+    if event_id:
+        text.append(f" · id {event_id[:ID_SHOWN]}", style="grey35")
+    return text
+
+
+ID_SHOWN = 8  # characters of an event id the CLI prints; `whyfence retire` accepts them
+_LEFT_OUT = ("untrusted_hidden", "stale_hidden", "retired_hidden")
+
+
+def _hidden_untrusted(console: Console, answer: dict) -> None:
+    """Say what was left out (untrusted, stale or retired), if anything was."""
+    if any(answer.get(key) for key in _LEFT_OUT):
+        flags = [flag for key, flag in (("untrusted_hidden", "--include-untrusted"),
+                                        ("stale_hidden", "--include-stale")) if answer.get(key)]
+        console.print(f"[yellow]{escape(answer['message'])}[/]"
+                      + (f" [grey50]({', '.join(flags)})[/]" if flags else ""))
 
 
 def _history(args: argparse.Namespace) -> int:
@@ -171,24 +208,196 @@ def _history(args: argparse.Namespace) -> int:
 def _rules(args: argparse.Namespace) -> int:
     from whyfence import queries
 
-    answer, code = _lookup(args, queries.lookup_rules)
+    answer, code = _lookup(args, lambda conn: queries.lookup_rules(
+        conn, trust.load(args.repo), include_untrusted=args.include_untrusted,
+        include_stale=args.include_stale))
     if answer is None:
         return code
     console = Console(highlight=False)
     if not answer["rules"]:
-        console.print(f"[grey50]{escape(answer['message'])}[/]")
+        if any(answer.get(key) for key in _LEFT_OUT):
+            _hidden_untrusted(console, answer)
+        else:
+            console.print(f"[grey50]{escape(answer['message'])}[/]")
         return 0
     for rule in answer["rules"]:
-        console.print(f"[bold magenta]•[/] {escape(rule['rule'])}")
-        origin = " · ".join(filter(None, [rule["recorded_at"][:10], *(rule["about"] or [])]))
-        console.print(f"  [grey50]{escape(origin)}[/]")
+        stale = " [yellow](stale: its code was deleted)[/]" if rule["stale"] else ""
+        console.print(f"[bold magenta]•[/] {escape(rule['rule'])}{stale}")
+        line = Text("  " + " · ".join(filter(None, [rule["recorded_at"][:10], *(rule["about"] or [])])) + " · ",
+                    style="grey50")
+        console.print(line.append_text(_origin_text(rule["origin"], event_id=rule["id"])))
+    _hidden_untrusted(console, answer)
+    return 0
+
+
+def _retire(args: argparse.Namespace) -> int:
+    from whyfence import queries
+
+    console = Console(highlight=False)
+    db_path = args.db.resolve() if args.db else _default_db(args.repo)
+    if not db_path.is_file():
+        console.print(f"[red]error:[/] no whyfence index at {escape(str(db_path))}; run `whyfence ingest` first")
+        return 2
+    with closing(store.connect(db_path)) as conn:
+        if args.list or not args.ids:
+            return _list_retired(console, conn, trust.load(args.repo))
+        targets = []
+        for prefix in args.ids:
+            matches = store.find_event_ids(conn, prefix.lower()) if len(prefix) >= 6 else []
+            if len(matches) != 1:
+                problem = "matches several records" if matches else "doesn't match any record"
+                if len(prefix) < 6:
+                    problem = "is too short (give at least 6 characters)"
+                console.print(f"[red]error:[/] {escape(prefix)!r} {problem}; ids are shown by "
+                              "`whyfence rules`, `why` and `search`")
+                return 2
+            targets.append(matches[0])
+        for event_id in targets:
+            if queries.retired(conn, event_id, trust.load(args.repo)):
+                console.print(f"[grey50]Already retired: {event_id[:ID_SHOWN]}[/]")
+                continue
+            try:
+                result = team.retire(conn, args.repo, event_id, args.reason or "", local=args.local)
+            except git.GitError as exc:
+                console.print(f"[red]error:[/] {escape(str(exc))}")
+                return 2
+            console.print(f"Retired [cyan]{result.event.kind}[/] {escape(result.event.summary)}")
+            if result.path is not None:
+                console.print(f"  [grey50]Recorded in {escape(result.path.as_posix())}; commit it to retire it "
+                              "for teammates who trust you.[/]")
+    return 0
+
+
+def _list_retired(console: Console, conn, trusted) -> int:
+    found = store.retirements(conn)
+    if not found:
+        console.print("[grey50]Nothing has been retired.[/]")
+        return 0
+    for retirement in found:
+        event = store.get_event(conn, retirement.event_id)
+        summary = event.summary if event else "(a record this index doesn't have)"
+        counts = retirement.origin == "local" or trusted.trusts(retirement.author)
+        console.print(f"[bold]{escape(summary)}[/]  [grey50]id {retirement.event_id[:ID_SHOWN]}[/]")
+        who = (retirement.author or "unknown").split(" <")[0] if retirement.origin == "shared" else "you"
+        details = [store.to_timestamp(retirement.retired_at)[:10], f"by {who}", retirement.file,
+                   f"\u201c{retirement.reason}\u201d" if retirement.reason else None]
+        line = Text("  " + " · ".join(filter(None, details)), style="grey50")
+        if not counts:
+            line.append(" · ignored: untrusted author", style="yellow")
+        console.print(line)
+    return 0
+
+
+def _search(args: argparse.Namespace) -> int:
+    from whyfence import queries
+
+    text = " ".join(args.text)
+    answer, code = _lookup(args, lambda conn: queries.lookup_search(
+        conn, text, trust.load(args.repo), include_untrusted=args.include_untrusted, limit=args.limit))
+    if answer is None:
+        return code
+    console = Console(highlight=False)
+    if not answer["events"]:
+        if not any(answer.get(key) for key in _LEFT_OUT):
+            console.print(f"[grey50]{escape(answer['message'])}[/]")
+        _hidden_untrusted(console, answer)
+        return 0
+    table = Table(box=None, show_header=False, padding=(0, 2, 0, 0), pad_edge=False)
+    table.add_column(no_wrap=True)
+    table.add_column(style="grey50", no_wrap=True)
+    table.add_column(overflow="fold")
+    for event in answer["events"]:
+        text_cell = Text(event["summary"])
+        if event["symbols"]:
+            text_cell.append("\n" + ", ".join(event["symbols"]), style="cyan")
+        text_cell.append("\n").append_text(_origin_text(event["origin"], event["confidence"], event["id"]))
+        table.add_row(Text(event["kind"], style=_KIND_STYLES.get(event["kind"], "")),
+                      event["recorded_at"][:10], text_cell)
+    console.print(table)
+    _hidden_untrusted(console, answer)
+    return 0
+
+
+def _trust(args: argparse.Namespace) -> int:
+    console = Console(highlight=False)
+    try:
+        root = git.repo_root(args.repo)
+    except git.GitError as exc:
+        console.print(f"[red]error:[/] {escape(str(exc))}")
+        return 2
+    scope = ["--global"] if args.globally else []
+    for value in args.add:
+        if value != trust.EVERYONE and not trust.email_of(value):
+            console.print(f"[red]error:[/] {escape(value)!r} is not an email address")
+            return 2
+        if value.lower() not in [v.lower() for v in trust.configured(root)]:
+            git_config(root, *scope, "--add", trust.CONFIG_KEY, value)
+    for value in args.remove:
+        git_config(root, *scope, "--fixed-value", "--unset-all", trust.CONFIG_KEY, value, check=False)
+    loaded = trust.load(root)
+    if loaded.everyone:
+        console.print("Rules from [bold]every[/] author are trusted (whyfence.trust = *).")
+    me = trust.email_of(git.config_value(root, "user.email"))
+    for email in sorted(loaded.emails):
+        console.print(f"  {escape(email)}" + ("  [grey50](you: user.email)[/]" if email == me else ""))
+    if not loaded.emails and not loaded.everyone:
+        console.print("[grey50]No one is trusted yet: set git's user.email, or run `whyfence trust EMAIL`.[/]")
+    console.print("[grey50]Your own agent sessions are always trusted. Stored in git config (whyfence.trust), "
+                  "never in the repository.[/]")
+    return 0
+
+
+def git_config(repo: Path, *args: str, check: bool = True) -> None:
+    import subprocess
+
+    result = subprocess.run(git._git(repo, "config", *args), capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
+    if check and result.returncode != 0:
+        raise git.GitError(result.stderr.strip() or "git config failed")
+
+
+def _check(args: argparse.Namespace) -> int:
+    from whyfence import check
+
+    console = Console(highlight=False)
+    errors = Console(highlight=False, stderr=True)
+    db_path = args.db.resolve() if args.db else _default_db(args.repo)
+    if not db_path.is_file():
+        errors.print(f"[red]error:[/] no whyfence index at {escape(str(db_path))}; run `whyfence ingest` first")
+        return 2
+    try:
+        with closing(store.connect(db_path)) as conn:
+            result = check.check(conn, args.repo, args.base, include_weak=args.all)
+    except (check.CheckError, git.GitError) as exc:
+        errors.print(f"[red]error:[/] {escape(str(exc))}")
+        return 2
+    if args.format in ("json", "markdown"):
+        # Always UTF-8: these go to files and APIs, and Windows would otherwise write cp1252,
+        # turning non-English text and the mention-breaking zero-width space into "?".
+        text = json.dumps(result.to_json(), indent=2, ensure_ascii=False) + "\n" if args.format == "json" \
+            else check.to_markdown(result)
+        sys.stdout.flush()
+        sys.stdout.buffer.write(text.encode("utf-8"))
+        sys.stdout.buffer.flush()
+    elif not result.fences:
+        console.print(f"[grey50]{_plural(result.changed, 'existing symbol')} changed since "
+                      f"{escape(args.base)}; none has a recorded rule, dead end, revert or stated reason.[/]")
+    else:
+        for fence in result.fences:
+            what = "deleted" if fence.deleted else f"renamed to {fence.new_name}" if fence.new_name else "changed"
+            console.print(f"[bold]{escape(fence.name)}[/]  [grey50]{escape(what)} · {escape(fence.file)}[/]")
+            for event in fence.events:
+                console.print(f"  [{_KIND_STYLES.get(event['kind'], '')}]{event['kind']}[/]  "
+                              f"{escape(event['summary'])}  [grey50]{event['recorded_at'][:10]}[/]")
+    if args.fail_on and any(e["kind"] in args.fail_on for f in result.fences for e in f.events):
+        return 1
     return 0
 
 
 def _mcp(args: argparse.Namespace) -> int:
     from whyfence import mcp_server  # deferred: the MCP stack is slow to import
 
-    mcp_server.serve(args.db.resolve() if args.db else _default_db(args.repo))
+    mcp_server.serve(args.db.resolve() if args.db else _default_db(args.repo), args.repo.resolve())
     return 0
 
 
@@ -233,9 +442,69 @@ def main(argv: list[str] | None = None) -> int:
         query.add_argument("--repo", type=Path, default=Path("."), help="repository whose index to read (default: .)")
         query.add_argument("--db", type=Path, help=f"database path (default: <repo>/{DEFAULT_DB.as_posix()})")
         query.add_argument("--json", action="store_true", help="print the same JSON the MCP tool returns")
-        query.set_defaults(func=func)
+        if name != "history":
+            query.add_argument("--include-untrusted", action="store_true",
+                               help="also show rules from authors you haven't trusted (see `whyfence trust`)")
+        if name == "rules":
+            query.add_argument("--include-stale", action="store_true",
+                               help="also show rules about code that has since been deleted")
+        query.set_defaults(func=func, include_untrusted=False, include_stale=False)
 
-    mcp = commands.add_parser("mcp", help="serve the why/history tools to MCP clients over stdio")
+    retiring = commands.add_parser(
+        "retire", help="mark a rule or record as no longer true; with no ids, list what's retired",
+        description="Retire records that are no longer true, by the ids `whyfence rules`, `why` and `search` "
+                    "print. A retirement takes effect in your index at once and is appended to your shared file "
+                    "in .whyfence/events/ (unless --local), so it survives rebuilding the index and, once "
+                    "committed, applies for teammates who trust you. Retirements by untrusted authors are ignored.")
+    retiring.add_argument("ids", nargs="*", metavar="ID", help="event ids, or their first 6+ characters")
+    retiring.add_argument("--reason", help="why it no longer holds (shared with the retirement)")
+    retiring.add_argument("--local", action="store_true", help="only in this index; don't write to the repository")
+    retiring.add_argument("--list", action="store_true", help="list retired records")
+    retiring.add_argument("--repo", type=Path, default=Path("."), help="repository (default: .)")
+    retiring.add_argument("--db", type=Path, help=f"database path (default: <repo>/{DEFAULT_DB.as_posix()})")
+    retiring.set_defaults(func=_retire)
+
+    searching = commands.add_parser(
+        "search", help="full-text search over every recorded decision, rule, dead end and correction",
+        description="Search what's recorded when there's no single function to ask `why` about.")
+    searching.add_argument("text", nargs="+", help="words to look for (matched literally)")
+    searching.add_argument("--limit", type=int, default=20, help="most results to show (default: 20, at most 100)")
+    searching.add_argument("--repo", type=Path, default=Path("."), help="repository whose index to read (default: .)")
+    searching.add_argument("--db", type=Path, help=f"database path (default: <repo>/{DEFAULT_DB.as_posix()})")
+    searching.add_argument("--json", action="store_true", help="print the same JSON the MCP tool returns")
+    searching.add_argument("--include-untrusted", action="store_true",
+                           help="also show rules from authors you haven't trusted (see `whyfence trust`)")
+    searching.set_defaults(func=_search)
+
+    trusting = commands.add_parser(
+        "trust", help="choose whose commits and shared notes may set rules for your agent",
+        description="Rules come from commit messages and .whyfence/events/, which anyone who lands a commit can "
+                    "write. Only authors listed here (plus your own user.email and your own agent sessions) may "
+                    "set rules. The list lives in git config, never in the repository. With no arguments, "
+                    "lists who is trusted.")
+    trusting.add_argument("add", nargs="*", metavar="EMAIL", help="author emails to trust; * trusts everyone")
+    trusting.add_argument("--remove", nargs="+", default=[], metavar="EMAIL", help="stop trusting these")
+    trusting.add_argument("--global", dest="globally", action="store_true",
+                          help="save in your global git config (every repository) instead of this one")
+    trusting.add_argument("--repo", type=Path, default=Path("."), help="repository (default: .)")
+    trusting.set_defaults(func=_trust)
+
+    checker = commands.add_parser(
+        "check", help="show what's recorded about the functions a branch or pull request changes",
+        description="Show the decisions, rules and dead ends recorded against every function or class that "
+                    "the first-parent commits in BASE..HEAD changed. Run `whyfence ingest` first.")
+    checker.add_argument("base", help="the branch or commit the change is based on, e.g. main or origin/main")
+    checker.add_argument("--repo", type=Path, default=Path("."), help="repository (default: .)")
+    checker.add_argument("--db", type=Path, help=f"database path (default: <repo>/{DEFAULT_DB.as_posix()})")
+    checker.add_argument("--format", choices=("text", "markdown", "json"), default="text",
+                         help="markdown is what the GitHub Action posts on pull requests")
+    checker.add_argument("--all", action="store_true",
+                         help="also list weak signals, such as old commits whose subject starts with \"Fix\"")
+    checker.add_argument("--fail-on", nargs="+", metavar="KIND", choices=sorted(store.EVENT_KINDS),
+                         help="exit 1 if a changed symbol has an event of one of these kinds, e.g. constraint")
+    checker.set_defaults(func=_check)
+
+    mcp = commands.add_parser("mcp", help="serve the rules/why/history/search tools to MCP clients over stdio")
     mcp.add_argument("--repo", type=Path, default=Path("."),
                      help="repository whose index to serve (default: .)")
     mcp.add_argument("--db", type=Path, help=f"database path (default: <repo>/{DEFAULT_DB.as_posix()})")

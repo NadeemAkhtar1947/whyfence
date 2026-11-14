@@ -1,0 +1,55 @@
+name: whyfence check
+description: Flags pull requests that change code with recorded decisions, rules or dead ends.
+author: whyfence
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  base:
+    description: >
+      Commit the change is based on. Defaults to the pull request's base; on GitHub's
+      merge checkout the merge commit's first parent is used instead.
+    required: false
+    default: ""
+  comment:
+    description: Post (and keep updated) one comment on the pull request. The job summary is always written.
+    required: false
+    default: "true"
+  fail-on:
+    description: Space-separated event kinds that fail the check when touched, e.g. "constraint dead_end".
+    required: false
+    default: ""
+  version:
+    description: whyfence version from PyPI. Defaults to the version in this action's tag (v0.3.0 -> 0.3.0), else the latest.
+    required: false
+    default: ""
+  github-token:
+    description: Token used to post the comment. Needs pull-requests write permission.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  fences:
+    description: Number of changed functions or classes with recorded history.
+    value: ${{ steps.check.outputs.fences }}
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v6
+
+    - id: check
+      shell: bash
+      env:
+        INPUT_BASE: ${{ inputs.base }}
+        INPUT_COMMENT: ${{ inputs.comment }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        GH_REPO: ${{ github.repository }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/action.sh"

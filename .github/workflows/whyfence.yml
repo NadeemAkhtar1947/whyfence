@@ -1,0 +1,20 @@
+name: whyfence
+
+# Runs this repository's own Action (./action.yml) on its pull requests, using the
+# whyfence code in the pull request rather than the release on PyPI.
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  fences:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ./
+        env:
+          WHYFENCE_FROM: ${{ github.workspace }}

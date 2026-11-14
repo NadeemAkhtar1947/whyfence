@@ -12,20 +12,37 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from collections import defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 EVENT_KINDS = ("decision", "dead_end", "correction", "constraint", "revert", "incident")
 SOURCE_KINDS = ("commit", "pr", "transcript", "adr", "manual")
 LINK_RELATIONS = ("about", "changed", "reverted", "broke")
 CONFIDENCE = ("EXTRACTED", "INFERRED")
 
-SCHEMA = f"""
+# A rule (or any event) someone has declared no longer true. Kept apart from events
+# because it may name an event this index doesn't have, and because who retired it
+# matters: only trusted authors may silence a rule.
+RETIREMENTS = """
+CREATE TABLE retirements (
+    id         TEXT PRIMARY KEY,
+    event_id   TEXT NOT NULL,
+    reason     TEXT NOT NULL DEFAULT '',
+    retired_at TEXT NOT NULL,
+    author     TEXT,                      -- "Name <email>": who committed it, or this checkout's user
+    origin     TEXT NOT NULL CHECK (origin IN ('local', 'shared')),
+    file       TEXT                       -- the shared file it came from
+);
+CREATE INDEX retirements_event ON retirements (event_id);
+"""
+
+SCHEMA = RETIREMENTS + f"""
 CREATE TABLE commits (
     sha         TEXT PRIMARY KEY,
     author      TEXT NOT NULL,            -- "Name <email>"
@@ -63,7 +80,8 @@ CREATE TABLE sources (
     agent        TEXT,                    -- claude-code, codex, gemini-cli
     uri          TEXT,
     content_hash TEXT,
-    captured_at  TEXT NOT NULL
+    captured_at  TEXT NOT NULL,
+    author       TEXT                     -- who committed it ("Name <email>"), for shared events
 );
 
 CREATE TABLE events (
@@ -116,6 +134,17 @@ MIGRATIONS = {
 ALTER TABLE symbol_versions ADD COLUMN qualified_name TEXT;
 CREATE INDEX symbol_versions_current ON symbol_versions (symbol_id) WHERE valid_to_sha IS NULL;
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+""",
+    # Shared events now record who committed them, and commits on merged branches get
+    # symbol links. Both are re-derived on the next ingest: shared events from
+    # .whyfence/events/, commit events from git.
+    2: f"""
+ALTER TABLE sources ADD COLUMN author TEXT;
+UPDATE events SET superseded_by = NULL
+ WHERE superseded_by IN (SELECT id FROM events WHERE source_id LIKE 'shared:%' OR source_id LIKE 'commit:%');
+DELETE FROM events WHERE source_id LIKE 'shared:%' OR source_id LIKE 'commit:%';
+DELETE FROM sources WHERE id LIKE 'shared:%' OR id LIKE 'commit:%';
+{RETIREMENTS}
 """,
 }
 
@@ -174,6 +203,7 @@ class Source:
     uri: str | None = None
     content_hash: str | None = None
     captured_at: datetime = field(default_factory=_now)
+    author: str | None = None
 
 
 @dataclass(frozen=True)
@@ -428,6 +458,19 @@ def symbols_changed_in(conn: sqlite3.Connection, sha: str) -> list[str]:
     return [row[0] for row in rows]
 
 
+def versions_named(conn: sqlite3.Connection, file_path: str, qualified_name: str) -> dict[str, set[str]]:
+    """Symbols that have had `qualified_name` in `file_path`: {symbol id: commits starting those versions}."""
+    rows = conn.execute(
+        """SELECT v.symbol_id, v.valid_from_sha FROM symbol_versions v JOIN symbols s ON s.id = v.symbol_id
+           WHERE v.file_path = ? AND COALESCE(v.qualified_name, s.qualified_name) = ?""",
+        (file_path, qualified_name),
+    )
+    found: dict[str, set[str]] = defaultdict(set)
+    for symbol_id, sha in rows:
+        found[symbol_id].add(sha)
+    return dict(found)
+
+
 def clear_symbol_versions(conn: sqlite3.Connection) -> None:
     """Drop all versions so symbol history can be rebuilt. Symbols (and event links) stay."""
     with _tx(conn):
@@ -500,10 +543,10 @@ def symbols_as_of(conn: sqlite3.Connection, when: datetime) -> list[tuple[Symbol
 def insert_source(conn: sqlite3.Connection, source: Source) -> None:
     with _tx(conn):
         conn.execute(
-            """INSERT OR IGNORE INTO sources (id, kind, agent, uri, content_hash, captured_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+            """INSERT OR IGNORE INTO sources (id, kind, agent, uri, content_hash, captured_at, author)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (source.id, source.kind, source.agent, source.uri, source.content_hash,
-             to_timestamp(source.captured_at)),
+             to_timestamp(source.captured_at), source.author),
         )
 
 
@@ -512,7 +555,7 @@ def get_source(conn: sqlite3.Connection, source_id: str) -> Source | None:
     if row is None:
         return None
     return Source(row["id"], row["kind"], row["agent"], row["uri"], row["content_hash"],
-                  from_timestamp(row["captured_at"]))
+                  from_timestamp(row["captured_at"]), row["author"])
 
 
 def insert_event(
@@ -627,3 +670,60 @@ def search_events(conn: sqlite3.Connection, text: str, *, limit: int = 20,
         sql += " AND e.superseded_by IS NULL"
     sql += " ORDER BY bm25(events_fts) LIMIT ?"
     return [_event_from_row(row) for row in conn.execute(sql, (query, limit))]
+
+
+# --------------------------------------------------------------------------- #
+# Retirements
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class Retirement:
+    event_id: str
+    reason: str = ""
+    author: str | None = None
+    origin: str = "local"
+    file: str | None = None
+    retired_at: datetime = field(default_factory=_now)
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+
+def insert_retirement(conn: sqlite3.Connection, retirement: Retirement) -> bool:
+    """Record a retirement; False if one with this id is already there."""
+    with _tx(conn):
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO retirements (id, event_id, reason, retired_at, author, origin, file)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (retirement.id, retirement.event_id, retirement.reason, to_timestamp(retirement.retired_at),
+             retirement.author, retirement.origin, retirement.file),
+        )
+    return cursor.rowcount == 1
+
+
+def retirements(conn: sqlite3.Connection, event_id: str | None = None) -> list[Retirement]:
+    sql, params = "SELECT * FROM retirements", ()
+    if event_id is not None:
+        sql, params = sql + " WHERE event_id = ?", (event_id,)
+    rows = conn.execute(sql + " ORDER BY retired_at DESC", params)
+    return [Retirement(r["event_id"], r["reason"], r["author"], r["origin"], r["file"],
+                       from_timestamp(r["retired_at"]), r["id"]) for r in rows]
+
+
+def find_event_ids(conn: sqlite3.Connection, prefix: str) -> list[str]:
+    """Event ids starting with `prefix` (as shown, shortened, by the CLI)."""
+    prefix = prefix.lower()
+    if not prefix or any(c not in "0123456789abcdef" for c in prefix):
+        return []  # ids are hex; anything else can't match
+    return [row[0] for row in conn.execute("SELECT id FROM events WHERE substr(id, 1, ?) = ? LIMIT 5",
+                                           (len(prefix), prefix))]
+
+
+def is_current(conn: sqlite3.Connection, symbol_id: str) -> bool:
+    """Whether the symbol still exists at the last indexed commit."""
+    return conn.execute("SELECT 1 FROM symbol_versions WHERE symbol_id = ? AND valid_to_sha IS NULL LIMIT 1",
+                        (symbol_id,)).fetchone() is not None
+
+
+def linked_symbol_ids(conn: sqlite3.Connection, event_id: str) -> list[str]:
+    return [row[0] for row in conn.execute("SELECT DISTINCT symbol_id FROM event_links WHERE event_id = ?",
+                                           (event_id,))]

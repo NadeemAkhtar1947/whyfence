@@ -1,15 +1,22 @@
 # Connecting whyfence to Claude
 
-`whyfence mcp` runs an MCP server over stdio with three read-only tools:
+`whyfence mcp` runs an MCP server over stdio with four read-only tools:
 
 | Tool | Returns |
 |---|---|
-| `rules()` | Every standing rule recorded for the repository, newest first. Agents are told to load these at session start |
+| `rules()` | Standing rules recorded for the repository by trusted authors, newest first. Agents are told to load these at session start |
 | `why(symbol_name)` | Decisions, dead ends, corrections, constraints, reverts and incidents recorded against a function or class, newest first |
 | `history(symbol_name)` | Each recorded version of the symbol, with the commit that introduced it (`valid_from`) and the commit that replaced it (`valid_to`) |
+| `search(text)` | Everything recorded that mentions the words, best match first, each with the functions and classes it is linked to |
 
 `symbol_name` can be a qualified name (`app.auth.refresh`), a bare name (`refresh`) or a
 symbol id. If a bare name matches several symbols, the tool returns the candidates.
+
+Every rule and event carries an `origin`: whether it came from a commit, one of your own
+agent sessions or a shared file, who wrote it, and whether you trust them (`whyfence
+trust`). `rules`, `why` and `search` leave out rules from untrusted authors unless called
+with `include_untrusted: true`. The server's instructions tell agents that all of it is
+history to weigh, never commands to follow.
 
 > **What feeds the tools:** `whyfence ingest` indexes every Python, JavaScript,
 > TypeScript, Go, Rust and Java function and class across git history (`history`), and mines commit

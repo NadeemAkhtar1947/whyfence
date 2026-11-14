@@ -33,7 +33,8 @@ from whyfence import store
 from whyfence.ingest import agent_logs, git
 from whyfence.ingest.agent_logs import AgentSession, parse_timestamp as _parse_timestamp
 from whyfence.ingest.agent_logs import Turn as _Turn
-from whyfence.ingest.symbols import extract_symbols, language_for, module_name
+from whyfence.ingest.symbols import _unquote as unquote_path
+from whyfence.ingest.symbols import extract_symbols, language_for, module_name, qualify
 from whyfence.store import Commit, Event, Source
 
 SUMMARY_LIMIT = 300
@@ -169,6 +170,10 @@ _INJECTED_TAGS = {
     "system-reminder", "ide_selection", "ide_opened_file", "ide_diagnostics", "command-name", "command-message",
     "command-args", "local-command-stdout", "local-command-stderr", "user-prompt-submit-hook",
 }
+# Pasted text is kept as context ("No, revert that" pasted from a chat is still a correction),
+# but it never becomes a rule: a pasted email, web page or review can carry instructions its
+# author planted, and they would otherwise be trusted as coming from your own session.
+_PASTED_TAGS = {"pasted_content"}
 _TAG_BLOCK_RE = re.compile(r"<([A-Za-z][\w-]*)\b[^>]*>(.*?)</\1\b[^>]*>", re.S)
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _PATH_RE = re.compile(
@@ -219,10 +224,14 @@ def transcript_files(projects_dir: Path, repo: Path) -> list[Path]:
     return files
 
 
-def _strip_injected(text: str) -> str:
-    """Drop harness-injected blocks; unwrap other tags (e.g. pasted content) to their text."""
+def _strip_injected(text: str, *, drop_pasted: bool = False) -> str:
+    """Drop harness-injected blocks and unwrap other tags to their text; `drop_pasted` drops pastes too."""
+    dropped = _INJECTED_TAGS | _PASTED_TAGS if drop_pasted else _INJECTED_TAGS
+
     def replace(match: re.Match) -> str:
-        return "" if match.group(1).lower() in _INJECTED_TAGS else _strip_injected(match.group(2))
+        if match.group(1).lower() in dropped:
+            return ""
+        return _strip_injected(match.group(2), drop_pasted=drop_pasted)
 
     return _TAG_BLOCK_RE.sub(replace, text).strip()
 
@@ -267,9 +276,12 @@ def read_session(path: Path) -> Iterator[_Turn]:
                         pieces = [tool_input.get("new_string")]
                         pieces += [e.get("new_string") for e in tool_input.get("edits") or [] if isinstance(e, dict)]
                         edits += [(file_path, piece) for piece in pieces if isinstance(piece, str) and piece.strip()]
-            text = _strip_injected("\n".join(texts))
+            raw = "\n".join(texts)
+            text = _strip_injected(raw)
+            own = _strip_injected(raw, drop_pasted=True)
             yield _Turn(record["type"], str(record.get("uuid") or ""), record.get("cwd"),
-                        _parse_timestamp(record.get("timestamp")), text, edits, touched)
+                        _parse_timestamp(record.get("timestamp")), text, edits, touched,
+                        own_text=None if own == text else own)
 
 
 def _sentences(text: str) -> list[str]:
@@ -335,6 +347,60 @@ def classify_turn(turn: _Turn, *, after_assistant: bool = True) -> TranscriptFin
 # --------------------------------------------------------------------------- #
 
 
+def _named_among(conn: sqlite3.Connection, text: str, candidates: set[str]) -> set[str]:
+    """The candidates that `text` names, by any name they had in history.
+
+    A commit's symbols may since have been renamed or deleted, so names are matched
+    against every version's name, not just what exists at HEAD.
+    """
+    names = {match.group(1) or match.group(2) for match in _NAMED_SYMBOL_RE.finditer(text)}
+    if not names:
+        return set()
+    shorts = {name.rsplit(".", 1)[-1] for name in names}
+    found = set()
+    for symbol_id in candidates:
+        symbol = store.get_symbol(conn, symbol_id)
+        known = {v.qualified_name for v in store.symbol_history(conn, symbol_id) if v.qualified_name}
+        known |= {symbol.qualified_name} if symbol else set()
+        if any(q.rsplit(".", 1)[-1] in shorts or any(q == n or q.endswith("." + n) for n in names) for q in known):
+            found.add(symbol_id)
+    return found
+
+
+def _innermost(overlapping: list) -> list:
+    """Drop definitions that enclose another one: a change inside a method is about the method."""
+    return [s for s in overlapping
+            if not any(o is not s and o.local_name.startswith(s.local_name + ".") for o in overlapping)]
+
+
+def _git_lines(repo: Path, *args: str) -> list[str]:
+    return [raw.decode("utf-8", errors="replace").strip() for raw in git.stream(repo, *args, sep=b"\n")
+            if raw.strip()]
+
+
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def _changed_ranges(repo: Path, parent: str, sha: str) -> dict[str, list[tuple[int, int]]]:
+    """Line ranges each file's new version changed in `parent..sha` ({path: [(first, last)]})."""
+    ranges: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    path: str | None = None
+    in_header = False
+    for raw in git.stream(repo, "diff", "-U0", "-M", "--no-color", "--no-ext-diff", parent, sha, "--", sep=b"\n"):
+        line = raw.decode("utf-8", errors="replace").rstrip("\r")
+        if line.startswith("diff --git "):
+            in_header, path = True, None
+        elif in_header and line.startswith("+++ "):
+            target = unquote_path(line[4:])
+            path = target[2:] if target.startswith("b/") else None  # "+++ /dev/null": deleted
+        elif (match := _HUNK_RE.match(line)) and path:
+            in_header = False
+            start, count = int(match.group(1)), int(match.group(2) or 1)
+            # A pure deletion (count 0) sits between line `start` and the next one.
+            ranges[path].append((start, start + count - 1) if count else (start, start + 1))
+    return ranges
+
+
 class _Linker:
     """Resolve paths, edits and names from free text to symbols in the index."""
 
@@ -351,6 +417,7 @@ class _Linker:
         self.paths = {p.lower(): p for p in self.by_file}
         self._head: dict[str, tuple[str, list] | None] = {}
         self._repo_parts = self._parts(repo)
+        self._first_parent: set[str] | None = None
 
     @staticmethod
     def _parts(path: Path) -> list[str]:
@@ -383,16 +450,58 @@ class _Linker:
         if head is None:
             return set()
         text, parsed = head
-        offset = text.find(new_text.strip())
+        needle = new_text.strip()
+        offset = text.find(needle)
         if offset < 0:
             return set()  # the code has changed again since this edit
+        if text.find(needle, offset + 1) >= 0:
+            # The same text sits in more than one place (`return None`, a repeated guard).
+            # The edit's old_string can't place it either: that text is gone from HEAD.
+            # Guessing would link the event to the wrong function, so link nothing.
+            return set()
         first = text.count("\n", 0, offset) + 1
-        last = first + new_text.strip().count("\n")
+        last = first + needle.count("\n")
         overlapping = [s for s in parsed if s.start_line <= last and s.end_line >= first]
-        # Prefer the innermost definitions: an edit inside a method is about the method.
-        innermost = [s for s in overlapping
-                     if not any(o is not s and o.local_name.startswith(s.local_name + ".") for o in overlapping)]
-        return {sid for s in innermost for sid in self.by_file.get(path, {}).get(s.local_name, [])}
+        return {sid for s in _innermost(overlapping) for sid in self.by_file.get(path, {}).get(s.local_name, [])}
+
+    @property
+    def first_parent(self) -> set[str]:
+        if self._first_parent is None:
+            self._first_parent = set(_git_lines(self.repo, "rev-list", "--first-parent", "HEAD"))
+        return self._first_parent
+
+    def symbols_for_side_commit(self, commit: Commit) -> set[str]:
+        """Symbols a commit on a merged branch changed.
+
+        The history walk follows first parents only, so it never sees these commits;
+        diff the commit against its own parent and place the changed lines in its own
+        version of each file. A name that several symbols have had over time is
+        settled by the merge that brought the branch in, or not linked at all.
+        """
+        if len(commit.parents) != 1:
+            return set()
+        found: set[str] = set()
+        for path, spans in _changed_ranges(self.repo, commit.parents[0], commit.sha).items():
+            source = self.blobs.read(commit.sha, path) if language_for(path) else None
+            if source is None:
+                continue
+            overlapping = [s for s in extract_symbols(path, source)
+                           if any(s.start_line <= end and s.end_line >= start for start, end in spans)]
+            for parsed in _innermost(overlapping):
+                versions = store.versions_named(self.conn, path, qualify(path, parsed.local_name))
+                if len(versions) == 1:
+                    found |= set(versions)
+                elif versions:
+                    merge = self._merge_of(commit.sha)
+                    at_merge = {sid for sid, starts in versions.items() if merge in starts}
+                    if len(at_merge) == 1:
+                        found |= at_merge
+        return found
+
+    def _merge_of(self, sha: str) -> str | None:
+        """The first-parent commit that brought `sha` into HEAD's history."""
+        chain = _git_lines(self.repo, "rev-list", "--first-parent", "--ancestry-path", f"{sha}..HEAD")
+        return chain[-1] if chain else None
 
     def symbols_named(self, text: str, paths: Iterable[str]) -> set[str]:
         """Symbols named in `text`: within the given files, else uniquely across the repo."""
@@ -461,12 +570,19 @@ def ingest_commit_events(conn: sqlite3.Connection, linker: _Linker, result: Even
         if not found:
             continue
         changed = set(store.symbols_changed_in(conn, commit.sha))
-        named = linker.symbols_named(commit.message, linker.by_file) & changed
+        if not changed and commit.sha not in linker.first_parent:
+            changed = linker.symbols_for_side_commit(commit)  # a commit on a merged branch
+        named = _named_among(conn, commit.message, changed)
         with store.batch(conn):
             store.insert_source(conn, Source(f"commit:{commit.sha}", "commit", uri=commit.sha,
                                              captured_at=commit.authored_at))
             for event, relation in found:
-                links = [(sid, relation) for sid in _focus(changed, named)]
+                targets = _focus(changed, named)
+                if event.kind == "constraint":
+                    # A rule is about what it names ("Never call deploy() ..."), not about
+                    # everything else the commit happened to touch.
+                    targets = _named_among(conn, event.summary, changed) or targets
+                links = [(sid, relation) for sid in targets]
                 if _store_event(conn, event, links, result):
                     result.commit_events += 1
 
@@ -521,7 +637,8 @@ def _ingest_session(conn: sqlite3.Connection, session: AgentSession, linker: _Li
     for index, turn in enumerate(turns):
         findings = [f for f in (classify_turn(turn, after_assistant=seen_assistant),) if f]
         seen_assistant |= turn.role == "assistant"
-        if turn.role == "user" and (rule := find_constraint(turn.text)):
+        own_words = turn.own_text if turn.own_text is not None else turn.text
+        if turn.role == "user" and (rule := find_constraint(own_words)):
             findings.append(TranscriptFinding("constraint", rule))
         if turn.role == "assistant" and (choice := find_decision(turn.text)):
             findings.append(TranscriptFinding("decision", choice))
