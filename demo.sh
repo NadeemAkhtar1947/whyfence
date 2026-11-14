@@ -91,6 +91,9 @@ fi
 REPO="$WORK/demo-app"
 mkdir -p "$REPO/app"
 git -C "$REPO" init -q -b main
+# The demo plays the repository's owner, so its commits are "yours" and trusted (see `whyfence trust`).
+git -C "$REPO" config user.name "whyfence demo"
+git -C "$REPO" config user.email "demo@example.com"
 
 cat >"$REPO/app/auth.py" <<'EOF'
 def refresh(token, *, leeway=60):
