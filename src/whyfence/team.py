@@ -19,11 +19,13 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import subprocess
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from whyfence import store
+from whyfence import store, trust
 from whyfence.ingest import git
 from whyfence.ingest.events import _sentences
 from whyfence.store import Event, Source
@@ -53,20 +55,64 @@ def _shared_files(repo: Path) -> list[Path]:
     return sorted(folder.glob("*.jsonl")) if folder.is_dir() else []
 
 
-def _records(path: Path) -> Iterator[dict]:
+def _numbered_records(path: Path) -> Iterator[tuple[int, dict]]:
     with path.open(encoding="utf-8", errors="replace") as handle:
-        for line in handle:
+        for number, line in enumerate(handle, start=1):
             try:
                 record = json.loads(line)
             except ValueError:
                 continue
             if isinstance(record, dict):
-                yield record
+                yield number, record
+
+
+def _records(path: Path) -> Iterator[dict]:
+    for _, record in _numbered_records(path):
+        yield record
+
+
+_UNCOMMITTED = "0" * 40
+
+
+def _local_identity(repo: Path) -> str | None:
+    email = git.config_value(repo, "user.email")
+    return f"{git.config_value(repo, 'user.name') or ''} <{email}>".strip() if email else None
+
+
+def line_authors(repo: Path, rel: str) -> dict[int, str | None]:
+    """Who committed each line of a file ("Name <email>"), from `git blame`.
+
+    Lines not committed yet, and files git doesn't track, are this checkout's
+    own: they're attributed to the local git identity.
+    """
+    local = _local_identity(repo)
+    result = subprocess.run(git._git(repo, "blame", "--line-porcelain", "--", rel), capture_output=True,
+                            text=True, encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        return defaultdict(lambda: local)
+    authors: dict[int, str | None] = defaultdict(lambda: local)
+    line = 0
+    sha = name = mail = ""
+    for row in result.stdout.splitlines():
+        if row.startswith("\t"):
+            if sha == _UNCOMMITTED:
+                authors[line] = local
+            else:
+                authors[line] = f"{name} {mail}".strip()
+        elif row.startswith("author "):
+            name = row[len("author "):]
+        elif row.startswith("author-mail "):
+            mail = row[len("author-mail "):]
+        else:
+            parts = row.split(" ")
+            if len(parts) >= 3 and len(parts[0]) >= 40 and all(c in "0123456789abcdef" for c in parts[0]):
+                sha, line, name, mail = parts[0], int(parts[2]), "", ""
+    return authors
 
 
 def _worth_sharing(conn: sqlite3.Connection, event: Event) -> bool:
     source = store.get_source(conn, event.source_id) if event.source_id else None
-    if source is None or source.kind != "transcript" or event.superseded_by:
+    if source is None or source.kind != "transcript" or event.superseded_by or store.retirements(conn, event.id):
         return False
     # An unlinked correction says nothing a teammate can act on; a project-wide rule does.
     return event.kind == "constraint" or bool(store.event_links_of(conn, event.id))
@@ -121,9 +167,15 @@ def import_shared(conn: sqlite3.Connection, repo: Path) -> int:
     added = 0
     for path in _shared_files(root):
         rel = path.relative_to(root).as_posix()
-        for record in _records(path):
+        authors = line_authors(root, rel)
+        for number, record in _numbered_records(path):
             agent = record.get("agent") if isinstance(record.get("agent"), str) else None
-            source_id = f"shared:{path.name}:{agent}"
+            author = authors[number]
+            if "retires" in record:
+                _import_retirement(conn, record, author, rel)
+                continue
+            # One source per file, agent and committer: trust is decided by who committed the line.
+            source_id = f"shared:{path.name}:{agent}:{trust.email_of(author) or 'unknown'}"
             event = _valid_event(record, source_id)
             if event is None or store.get_event(conn, event.id) is not None:
                 continue
@@ -137,7 +189,63 @@ def import_shared(conn: sqlite3.Connection, repo: Path) -> int:
                     links.append((symbol, link["relation"]))
             with store.batch(conn):
                 store.insert_source(conn, Source(source_id, "transcript", agent=agent, uri=rel,
-                                                 captured_at=event.recorded_at))
+                                                 captured_at=event.recorded_at, author=author))
                 store.insert_event(conn, event, links)
             added += 1
     return added
+
+
+# --------------------------------------------------------------------------- #
+# Retiring what's no longer true
+# --------------------------------------------------------------------------- #
+
+REASON_LIMIT = 300
+
+
+def _import_retirement(conn: sqlite3.Connection, record: dict, author: str | None, rel: str) -> None:
+    record_id, event_id, reason = record.get("id"), record.get("retires"), record.get("reason") or ""
+    if not (isinstance(record_id, str) and _ID_RE.match(record_id)):
+        return
+    if not (isinstance(event_id, str) and _ID_RE.match(event_id)) or not isinstance(reason, str):
+        return
+    try:
+        when = store.from_timestamp(record["retired_at"]) if isinstance(record.get("retired_at"), str) else None
+    except ValueError:
+        return
+    if when is None or when.tzinfo is None:
+        return
+    store.insert_retirement(conn, store.Retirement(event_id, " ".join(reason.split())[:REASON_LIMIT], author,
+                                                   "shared", rel, when, record_id))
+
+
+@dataclass(frozen=True)
+class RetireResult:
+    event: Event
+    path: Path | None  # the shared file it was written to; None with local=True
+
+
+def retire(conn: sqlite3.Connection, repo: Path, event_id: str, reason: str = "", *,
+           local: bool = False) -> RetireResult:
+    """Mark an event as no longer true.
+
+    It takes effect in this index at once. Unless `local`, it is also appended to
+    your shared file, so it survives rebuilding the index and, once you commit it,
+    reaches teammates who trust you.
+    """
+    root = git.repo_root(repo)
+    event = store.get_event(conn, event_id)
+    if event is None:
+        raise KeyError(event_id)
+    retirement = store.Retirement(event.id, " ".join(reason.split())[:REASON_LIMIT], _local_identity(root),
+                                  "local", None)
+    target = None if local else root / EVENTS_DIR / f"{_author_slug(root)}.jsonl"
+    if target is not None:
+        retirement = store.Retirement(retirement.event_id, retirement.reason, retirement.author, "local",
+                                      target.relative_to(root).as_posix(), retirement.retired_at, retirement.id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps({"v": 1, "id": retirement.id, "retires": event.id, "reason": retirement.reason,
+                                     "retired_at": store.to_timestamp(retirement.retired_at)},
+                                    ensure_ascii=False, sort_keys=True) + "\n")
+    store.insert_retirement(conn, retirement)
+    return RetireResult(event, target)

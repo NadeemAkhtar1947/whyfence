@@ -12,6 +12,7 @@ from whyfence.cli import main
 from whyfence.ingest import agent_logs, events, git, symbols
 from whyfence.ingest.symbols import extract_symbols
 from whyfence.store import Event, Symbol
+from whyfence.trust import Trust
 
 AUTH = "def refresh(token):\n    audit.log('renew', token)\n    return client.renew(token)\n"
 
@@ -141,7 +142,7 @@ def test_rules_lists_standing_constraints_once_newest_first():
         replaced = store.insert_event(conn, Event("constraint", "Use floats", recorded_at=t0))
         store.supersede_event(conn, replaced.id, old.id)
         store.insert_event(conn, Event("decision", "Not a rule", recorded_at=t0))
-        answer = queries.lookup_rules(conn)
+        answer = queries.lookup_rules(conn, Trust(everyone=True))
     assert [r["rule"] for r in answer["rules"]] == ["Must use Decimal for money", "never  block the LOOP"]
     assert answer["rules"][0]["about"] == ["app.send"]
 
@@ -356,17 +357,24 @@ def test_teammate_gets_shared_events_with_links(repo, tmp_path):
     with closing(store.connect()) as mine:
         root = indexed_session(repo, tmp_path, mine)
         team.share(mine, repo.path)
+    repo.commit("Share what the agent learned")  # committed by Ada <ada@example.com>
     with closing(store.connect()) as theirs:
         git.ingest_git(theirs, root)
         symbols.ingest_symbols(theirs, root)
         events.ingest_events(theirs, root, transcripts=False)
         assert team.import_shared(theirs, root) == 3
         assert team.import_shared(theirs, root) == 0
-        answer = queries.lookup_why(theirs, "refresh")
+        ada = Trust(frozenset({"ada@example.com"}))
+        answer = queries.lookup_why(theirs, "refresh", ada)
         rule = next(e for e in answer["events"] if e["kind"] == "constraint")
         assert rule["summary"] == "Never call refresh() from the request path."
         assert rule["source"]["agent"] == "codex" and rule["source"]["uri"].startswith(".whyfence/events/")
-        assert len(queries.lookup_rules(theirs)["rules"]) == 2
+        assert rule["origin"] == {"kind": "shared", "author": "Ada <ada@example.com>",
+                                  "file": rule["source"]["uri"], "trusted": True}
+        assert len(queries.lookup_rules(theirs, ada)["rules"]) == 2
+        # Someone who hasn't trusted Ada gets her history but not her rules.
+        assert queries.lookup_rules(theirs)["rules"] == []
+        assert queries.lookup_rules(theirs)["untrusted_hidden"] == 2
 
 
 @needs_git

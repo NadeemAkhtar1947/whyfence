@@ -109,10 +109,11 @@ def test_empty_index_explains_missing_symbols():
     assert result["status"] == "not_found" and "no symbols yet" in result["message"]
 
 
-def run_client(db: Path, calls: list[tuple[str, dict]]):
+def run_client(db: Path, calls: list[tuple[str, dict]], repo: Path | None = None):
     """Start `python -m whyfence mcp` over stdio, as Claude would, and make tool calls."""
     async def session():
-        params = StdioServerParameters(command=sys.executable, args=["-m", "whyfence", "mcp", "--db", str(db)])
+        args = ["-m", "whyfence", "mcp", "--db", str(db)] + (["--repo", str(repo)] if repo else [])
+        params = StdioServerParameters(command=sys.executable, args=args)
         with anyio.fail_after(60):
             async with stdio_client(params) as (read, write), ClientSession(read, write) as client:
                 await client.initialize()
@@ -129,7 +130,7 @@ def test_stdio_server_end_to_end(db_path):
         ("history", {"symbol_name": "app.auth.refresh"}),
     ])
     by_name = {tool.name: tool for tool in tools.tools}
-    assert set(by_name) == {"why", "history", "rules"}
+    assert set(by_name) == {"why", "history", "rules", "search"}
     assert by_name["why"].annotations.read_only_hint is True
     assert by_name["history"].input_schema["required"] == ["symbol_name"]
 
@@ -146,3 +147,26 @@ def test_stdio_server_reports_missing_index_as_tool_error(tmp_path):
     _, (result,) = run_client(tmp_path / "missing.db", [("why", {"symbol_name": "x"})])
     assert result.is_error
     assert "whyfence ingest" in result.content[0].text
+
+
+def test_search_finds_events_by_text_with_their_symbols(conn):
+    result = mcp_server.lookup_search(conn, "deadlocked load")
+    assert [e["summary"] for e in result["events"]] == ["A global refresh lock deadlocked under load"]
+    assert result["events"][0]["symbols"] == ["app.auth.refresh"]
+    assert result["events"][0]["origin"]["kind"] == "unknown"
+    assert mcp_server.lookup_search(conn, "401")["events"][0]["summary"] == "Refresh proactively 60s before expiry"
+    assert mcp_server.lookup_search(conn, "nothing-like-this")["message"].startswith("Nothing recorded mentions")
+    assert mcp_server.lookup_search(conn, "   ")["status"] == "error"
+    assert mcp_server.lookup_search(conn, 'prod: "p99 OR *')["status"] == "ok"  # FTS syntax can't break it
+
+
+def test_search_over_stdio_and_cli(db_path, capsys):
+    from whyfence.cli import main
+
+    _, (result,) = run_client(db_path, [("search", {"text": "deadlocked"})])
+    assert not result.is_error
+    assert result.structured_content["events"][0]["kind"] == "dead_end"
+    assert main(["search", "deadlocked", "--db", str(db_path)]) == 0
+    out = capsys.readouterr().out
+    assert "deadlocked" in out and "app.auth.refresh" in out
+    assert main(["search", "   ", "--db", str(db_path)]) == 1

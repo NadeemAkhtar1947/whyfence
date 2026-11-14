@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from whyfence import store, team
+from whyfence import store, team, trust
 from whyfence.store import Event
 from whyfence.ingest import git, symbols
 
@@ -145,6 +145,12 @@ def check(conn: sqlite3.Connection, repo: Path | str, base: str, *, include_weak
             source = store.get_source(conn, event.source_id) if event.source_id else None
             if event.source_id and event.source_id.startswith("shared:") and event.id not in known_shared:
                 continue
+            # Retired before this change (committed on the base, or retired in this local index):
+            # no longer true, so not worth a reviewer's time. A retirement the change itself adds
+            # doesn't count, or a pull request could silence the fences it trips.
+            if any(r.origin == "local" or r.id in known_shared for r in store.retirements(conn, event.id)):
+                continue
+            where = trust.origin(conn, event, trust.Trust())
             found.append({
                 "kind": event.kind,
                 "summary": event.summary,
@@ -154,6 +160,7 @@ def check(conn: sqlite3.Connection, repo: Path | str, base: str, *, include_weak
                 "source": source.kind if source else None,
                 "agent": source.agent if source else None,
                 "confidence": event.confidence,
+                "author": where.get("author"),
             })
         if not found:
             continue
@@ -199,6 +206,8 @@ def _origin(event: dict[str, Any]) -> str:
         origin = f"{event['agent'] or 'agent'} session"
     else:
         origin = event["source"] or "recorded"
+    if event.get("author"):
+        origin += f", by {event['author'].split(' <')[0]}"  # the name only: no emails in public comments
     if event["confidence"] == "INFERRED":
         origin += ", inferred"
     return f"{event['recorded_at'][:10]}, {_md(origin)}"

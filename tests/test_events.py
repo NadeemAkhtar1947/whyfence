@@ -11,6 +11,7 @@ from test_symbols import Repo, needs_git
 from whyfence import mcp_server, store
 from whyfence.ingest import events, git, symbols
 from whyfence.ingest.events import classify_commit, classify_turn, read_session
+from whyfence.trust import Trust
 
 pytestmark = needs_git
 
@@ -167,10 +168,13 @@ def test_commit_constraints_are_separate_events(repo_factory):
         git.ingest_git(conn, repo.path)
         symbols.ingest_symbols(conn, repo.path)
         events.ingest_events(conn, repo.path, transcripts=False)
-        assert sorted((e["kind"], e["summary"]) for e in mcp_server.lookup_why(conn, "send")["events"]) == [
+        ada = Trust(frozenset({"ada@example.com"}))
+        assert sorted((e["kind"], e["summary"]) for e in mcp_server.lookup_why(conn, "send", ada)["events"]) == [
             ("constraint", "Never call send() from the event loop; it blocks."),
             ("incident", "fix: send retries"),
         ]
+        strangers = mcp_server.lookup_why(conn, "send")  # nobody trusted: the rule is held back, the fix isn't
+        assert [e["kind"] for e in strangers["events"]] == ["incident"] and strangers["untrusted_hidden"] == 1
 
 
 def test_injected_tags_are_dropped_and_wrappers_unwrapped():
