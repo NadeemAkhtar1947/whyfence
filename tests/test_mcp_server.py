@@ -58,7 +58,7 @@ def db_path(tmp_path) -> Path:
 
 
 def test_history_returns_timeline_with_commits(conn):
-    result = mcp_server.lookup_history(conn, "app.auth.refresh")
+    result = mcp_server.lookup_history(conn, "app.auth.refresh", Trust(everyone=True))
     assert result["status"] == "ok"
     assert result["symbol"] == {"id": "s-auth", "name": "app.auth.refresh", "kind": "function", "language": "python"}
     first, second = result["versions"]
@@ -76,7 +76,7 @@ def test_history_marks_commits_that_were_never_ingested(conn):
 
 
 def test_why_returns_live_events_strongest_first(conn):
-    result = mcp_server.lookup_why(conn, "s-auth")
+    result = mcp_server.lookup_why(conn, "s-auth", Trust(everyone=True))
     kinds = [(e["kind"], e["summary"]) for e in result["events"]]
     assert kinds == [
         ("dead_end", "A global refresh lock deadlocked under load"),  # a dead end outranks a newer decision
@@ -151,11 +151,12 @@ def test_stdio_server_reports_missing_index_as_tool_error(tmp_path):
 
 
 def test_search_finds_events_by_text_with_their_symbols(conn):
-    result = mcp_server.lookup_search(conn, "deadlocked load")
+    result = mcp_server.lookup_search(conn, "deadlocked load", Trust(everyone=True))
     assert [e["summary"] for e in result["events"]] == ["A global refresh lock deadlocked under load"]
     assert result["events"][0]["symbols"] == ["app.auth.refresh"]
     assert result["events"][0]["origin"]["kind"] == "unknown"
-    assert mcp_server.lookup_search(conn, "401")["events"][0]["summary"] == "Refresh proactively 60s before expiry"
+    assert mcp_server.lookup_search(conn, "401", Trust(everyone=True))["events"][0]["summary"] == \
+        "Refresh proactively 60s before expiry"
     assert mcp_server.lookup_search(conn, "nothing-like-this")["message"].startswith("Nothing recorded mentions")
     assert mcp_server.lookup_search(conn, "   ")["status"] == "error"
     assert mcp_server.lookup_search(conn, 'prod: "p99 OR *')["status"] == "ok"  # FTS syntax can't break it
@@ -168,8 +169,11 @@ def test_search_over_stdio_and_cli(db_path, capsys):
     assert not result.is_error
     assert result.structured_content["events"][0]["kind"] == "dead_end"
     assert main(["search", "deadlocked", "--db", str(db_path)]) == 0
+    out = capsys.readouterr().out  # the seed event has no known author: its text is withheld
+    assert "deadlocked" not in out and "withheld" in out and "app.auth.refresh" in out
+    assert main(["search", "deadlocked", "--db", str(db_path), "--include-untrusted"]) == 0
     out = capsys.readouterr().out
-    assert "deadlocked" in out and "app.auth.refresh" in out
+    assert "deadlocked" in out and "untrusted author" in out
     assert main(["search", "   ", "--db", str(db_path)]) == 1
 
 

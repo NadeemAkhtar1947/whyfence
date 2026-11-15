@@ -344,7 +344,7 @@ def test_why_returns_commit_and_transcript_events_for_a_symbol(scenario, tmp_pat
         result = ingest_all(conn, root, projects)
         assert (result.commit_events, result.transcript_events, result.sessions) == (1, 4, 2)
 
-        answer = mcp_server.lookup_why(conn, "app.auth.refresh")
+        answer = mcp_server.lookup_why(conn, "app.auth.refresh", Trust(frozenset({"ada@example.com"})))
         assert answer["status"] == "ok"
         assert [(e["kind"], e["summary"]) for e in answer["events"]] == [
             ("dead_end", "I see the issue now: the 401 handler and refresh both renewed the token, "

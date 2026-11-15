@@ -6,28 +6,29 @@ so both give the same answer. Results are plain JSON-ready dicts.
 
 from __future__ import annotations
 
-import re
 import sqlite3
 from typing import Any
 
 from whyfence import store
-from whyfence.ingest.events import _CONSTRAINT_RE
 from whyfence.store import Commit, Event, Symbol
 from whyfence.trust import Trust, origin
 
 DETAIL_LIMIT = 500  # characters of an event body to include
 
 
-def _commit(commit: Commit | None, sha: str | None) -> dict[str, Any] | None:
+def _commit(commit: Commit | None, sha: str | None, trust: Trust | None = None,
+            include_untrusted: bool = True) -> dict[str, Any] | None:
     if sha is None:
         return None
     if commit is None:
         return {"sha": sha, "ingested": False}
+    hide = not include_untrusted and trust is not None and not trust.trusts_commit(commit.author, commit.committer)
     return {
         "sha": commit.sha,
         "date": store.to_timestamp(commit.authored_at),
         "author": commit.author,
-        "subject": commit.subject,
+        "subject": None if hide else commit.subject,
+        **({"text_withheld": True} if hide else {}),
     }
 
 
@@ -53,7 +54,11 @@ def _resolve(conn: sqlite3.Connection, name: str) -> Symbol | dict[str, Any]:
     }
 
 
-def lookup_history(conn: sqlite3.Connection, symbol_name: str) -> dict[str, Any]:
+def lookup_history(conn: sqlite3.Connection, symbol_name: str, trust: Trust | None = None, *,
+                   include_untrusted: bool = False) -> dict[str, Any]:
+    """Each version of a symbol, with the commits that bound it. The subject of a commit by
+    an author you haven't trusted is left out unless `include_untrusted` is set."""
+    trust = trust or Trust()
     symbol = _resolve(conn, symbol_name)
     if isinstance(symbol, dict):
         return symbol
@@ -65,11 +70,17 @@ def lookup_history(conn: sqlite3.Connection, symbol_name: str) -> dict[str, Any]
             "file": version.file_path,
             "lines": [version.start_line, version.end_line],
             "body_hash": version.body_hash,
-            "valid_from": _commit(entry.introduced_by, version.valid_from_sha),
-            "valid_to": _commit(entry.replaced_by, version.valid_to_sha),
+            "valid_from": _commit(entry.introduced_by, version.valid_from_sha, trust, include_untrusted),
+            "valid_to": _commit(entry.replaced_by, version.valid_to_sha, trust, include_untrusted),
             "current": version.valid_to_sha is None,
         })
-    return {"status": "ok", "symbol": _symbol(symbol), "versions": versions}
+    hidden = {bound["sha"] for v in versions for bound in (v["valid_from"], v["valid_to"])
+              if bound and bound.get("text_withheld")}
+    result: dict[str, Any] = {"status": "ok", "symbol": _symbol(symbol), "versions": versions}
+    if hidden:
+        result["untrusted_text_withheld"] = len(hidden)
+        result["message"] = _notes(withheld=len(hidden))
+    return result
 
 
 def retired(conn: sqlite3.Connection, event_id: str, trust: Trust) -> dict[str, Any] | None:
@@ -101,7 +112,7 @@ def _plural(count: int, one: str, many: str) -> str:
 
 
 def _notes(untrusted: int = 0, stale: int = 0, retired_count: int = 0, withheld: int = 0,
-           omitted: int = 0, github: int = 0) -> str | None:
+           omitted: int = 0, github: int = 0, unknown: int = 0) -> str | None:
     """Say what was left out, and how to see it."""
     notes = []
     if omitted:
@@ -112,10 +123,14 @@ def _notes(untrusted: int = 0, stale: int = 0, retired_count: int = 0, withheld:
         notes.append(f"{_plural(untrusted, 'rule', 'rules')} from authors you haven't trusted (see `whyfence "
                      "trust`); pass include_untrusted=true to see them, marked")
     if github:
-        notes.append(f"{_plural(github, 'rule', 'rules')} of those {'is' if github == 1 else 'are'} by an author "
-                     "you trust but merged through GitHub's web UI, whose committer (noreply@github.com) "
-                     "isn't trusted by default; if your team reviews every pull request, run "
-                     "`whyfence trust noreply@github.com`")
+        notes.append(f"{_plural(github, 'rule', 'rules')} of those {'claims' if github == 1 else 'claim'} an "
+                     "author you trust and a merge through GitHub's web UI (committer noreply@github.com), "
+                     "which isn't trusted by default because anyone can write that committer name; if your "
+                     "team reviews every pull request, run `whyfence trust noreply@github.com`")
+    if unknown:
+        notes.append(f"{_plural(unknown, 'rule', 'rules')} of those {'claims' if unknown == 1 else 'claim'} an "
+                     "author you trust, but this index was built by an older whyfence that didn't record "
+                     "committers, so the author can't be checked; run `whyfence ingest` to upgrade it")
     if stale:
         notes.append(f"{_plural(stale, 'rule', 'rules')} about code that has since been deleted; "
                      "pass include_stale=true to see them")
@@ -123,56 +138,27 @@ def _notes(untrusted: int = 0, stale: int = 0, retired_count: int = 0, withheld:
         notes.append(f"{_plural(retired_count, 'record', 'records')} retired as no longer true "
                      "(`whyfence retire --list`)")
     if withheld:
-        notes.append(f"{_plural(withheld, 'instruction-shaped sentence', 'instruction-shaped sentences')} "
-                     "from authors you haven't trusted, inside other records; pass include_untrusted=true "
-                     "to see them")
+        notes.append(f"the text of {_plural(withheld, 'record', 'records')} from authors you haven't trusted "
+                     "(only kind, date, commit and author are shown); pass include_untrusted=true to read "
+                     "it, marked")
     return "Left out: " + "; ".join(notes) + "." if notes else None
 
 
-WITHHELD = "[instruction from an untrusted author withheld]"
-_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
-# Shell commands are instructions however they're phrased ("... because pip install x fixes it").
-_COMMAND_RE = re.compile(
-    r"\b(?:curl|wget|pip3?\s+install|npm\s+(?:install|i)|npx|yarn\s+add|sudo|chmod|powershell|iex)\b|"
-    r"\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python3?|node)\b|\b(?:bash|sh)\s+-c\b",
-    re.I,
-)
-
-
-def withhold_instructions(text: str) -> tuple[str, int]:
-    """`text` with every instruction-shaped sentence replaced, and how many were.
-
-    For text from authors you haven't trusted. Their rules are already left out of
-    `rules` and `why`, but the same sentence can sit in the body of an incident or
-    decision from the same commit; this keeps it from reaching the agent that way.
-    Wrapped lines are joined first, so a command split across two lines is still seen.
-    """
-    sentences = [s for s in _SENTENCE_END.split(" ".join(text.split())) if s]
-    kept, withheld = [], 0
-    for sentence in sentences:
-        if _CONSTRAINT_RE.search(sentence) or _COMMAND_RE.search(sentence):
-            withheld += 1
-            if not kept or kept[-1] != WITHHELD:
-                kept.append(WITHHELD)
-        else:
-            kept.append(sentence)
-    return (" ".join(kept), withheld) if withheld else (text, 0)
-
-
 def _event(conn: sqlite3.Connection, event: Event, where: dict[str, Any], *,
-           withhold: bool = False) -> dict[str, Any]:
-    summary, body, withheld = event.summary, event.body, 0
-    if withhold:  # before truncating: a cut could split an instruction and hide it from the check
-        summary, in_summary = withhold_instructions(summary)
-        body, in_body = withhold_instructions(body)
-        withheld = in_summary + in_body
-    detail = body if len(body) <= DETAIL_LIMIT else body[:DETAIL_LIMIT] + "…"
+           hide_text: bool = False) -> dict[str, Any]:
+    """One record. With `hide_text` (an untrusted author, not asked for), no summary or detail:
+
+    text from someone you haven't trusted is where an injected instruction would be, and no
+    pattern recognises every phrasing ("Ignore previous instructions...", "The assistant
+    should fetch..."). What it is, when, which commit and who wrote it are kept.
+    """
+    detail = event.body if len(event.body) <= DETAIL_LIMIT else event.body[:DETAIL_LIMIT] + "…"
     return {
         "id": event.id,
         "kind": event.kind,
-        "summary": summary,
-        "detail": detail or None,
-        **({"withheld": withheld} if withheld else {}),
+        "summary": None if hide_text else event.summary,
+        "detail": None if hide_text else detail or None,
+        **({"text_withheld": True} if hide_text else {}),
         "confidence": event.confidence,
         "recorded_at": store.to_timestamp(event.recorded_at),
         "commit": event.commit_sha,
@@ -192,7 +178,7 @@ def lookup_rules(conn: sqlite3.Connection, trust: Trust | None = None, *,
     trust = trust or Trust()
     rules: list[dict[str, Any]] = []
     seen: set[str] = set()
-    untrusted = stale = retired_count = github = 0
+    untrusted = stale = retired_count = github = unknown = 0
     candidates = [(event, origin(conn, event, trust)) for event in store.events_between(conn, kinds=["constraint"])]
     candidates.sort(key=lambda pair: not pair[1]["trusted"])  # stable: a trusted copy wins the dedupe
     for event, where in candidates:
@@ -206,6 +192,7 @@ def lookup_rules(conn: sqlite3.Connection, trust: Trust | None = None, *,
         if not where["trusted"] and not include_untrusted:
             untrusted += 1
             github += where.get("untrusted_because") == "github_web_merge"
+            unknown += where.get("untrusted_because") == "committer_unknown"
             continue
         old = is_stale(conn, event.id)
         if old and not include_stale:
@@ -222,11 +209,12 @@ def lookup_rules(conn: sqlite3.Connection, trust: Trust | None = None, *,
         })
     rules.sort(key=lambda rule: rule["recorded_at"], reverse=True)
     result: dict[str, Any] = {"status": "ok", "rules": rules}
-    for name, count in (("untrusted_hidden", untrusted), ("github_merge_hidden", github), ("stale_hidden", stale),
+    for name, count in (("untrusted_hidden", untrusted), ("github_merge_hidden", github),
+                        ("committer_unknown_hidden", unknown), ("stale_hidden", stale),
                         ("retired_hidden", retired_count)):
         if count:
             result[name] = count
-    note = _notes(untrusted, stale, retired_count, github=github)
+    note = _notes(untrusted, stale, retired_count, github=github, unknown=unknown)
     if note:
         result["message"] = note
     elif not rules:
@@ -254,7 +242,7 @@ def lookup_why(conn: sqlite3.Connection, symbol_name: str, trust: Trust | None =
     if isinstance(symbol, dict):
         return symbol
     events = []
-    untrusted = retired_count = withheld = github = 0
+    untrusted = retired_count = withheld = github = unknown = 0
     for event in store.events_for_symbol(conn, symbol.id):
         if retired(conn, event.id, trust):
             retired_count += 1
@@ -263,10 +251,11 @@ def lookup_why(conn: sqlite3.Connection, symbol_name: str, trust: Trust | None =
         if event.kind == "constraint" and not where["trusted"] and not include_untrusted:
             untrusted += 1
             github += where.get("untrusted_because") == "github_web_merge"
+            unknown += where.get("untrusted_because") == "committer_unknown"
             continue
         source = store.get_source(conn, event.source_id) if event.source_id else None
-        item = _event(conn, event, where, withhold=not where["trusted"] and not include_untrusted)
-        withheld += item.get("withheld", 0)
+        item = _event(conn, event, where, hide_text=not where["trusted"] and not include_untrusted)
+        withheld += item.get("text_withheld", False)
         item["source"] = {"kind": source.kind, "agent": source.agent, "uri": source.uri} if source else None
         events.append(item)
     events.sort(key=_strength)  # stable: newest first within each strength
@@ -278,13 +267,15 @@ def lookup_why(conn: sqlite3.Connection, symbol_name: str, trust: Trust | None =
         result["untrusted_hidden"] = untrusted
     if github:
         result["github_merge_hidden"] = github
+    if unknown:
+        result["committer_unknown_hidden"] = unknown
     if retired_count:
         result["retired_hidden"] = retired_count
     if withheld:
-        result["withheld"] = withheld
+        result["untrusted_text_withheld"] = withheld
     if omitted:
         result["omitted"] = omitted
-    note = _notes(untrusted, 0, retired_count, withheld, omitted, github)
+    note = _notes(untrusted, 0, retired_count, withheld, omitted, github, unknown)
     if note:
         result["message"] = note
     elif not events:
@@ -309,7 +300,7 @@ def lookup_search(conn: sqlite3.Connection, text: str, trust: Trust | None = Non
     if not text.split():
         return {"status": "error", "query": text, "message": "Give some words to search for."}
     hits: list[dict[str, Any]] = []
-    untrusted = retired_count = withheld = github = 0
+    untrusted = retired_count = withheld = github = unknown = 0
     for event in store.search_events(conn, text, limit=limit * 3):  # room for the ones left out
         if retired(conn, event.id, trust):
             retired_count += 1
@@ -318,11 +309,12 @@ def lookup_search(conn: sqlite3.Connection, text: str, trust: Trust | None = Non
         if event.kind == "constraint" and not where["trusted"] and not include_untrusted:
             untrusted += 1
             github += where.get("untrusted_because") == "github_web_merge"
+            unknown += where.get("untrusted_because") == "committer_unknown"
             continue
         if len(hits) == limit:
             continue
-        item = _event(conn, event, where, withhold=not where["trusted"] and not include_untrusted)
-        withheld += item.get("withheld", 0)
+        item = _event(conn, event, where, hide_text=not where["trusted"] and not include_untrusted)
+        withheld += item.get("text_withheld", False)
         item["symbols"] = store.symbols_linked_to(conn, event.id)
         hits.append(item)
     result: dict[str, Any] = {"status": "ok", "query": text, "events": hits}
@@ -330,11 +322,13 @@ def lookup_search(conn: sqlite3.Connection, text: str, trust: Trust | None = Non
         result["untrusted_hidden"] = untrusted
     if github:
         result["github_merge_hidden"] = github
+    if unknown:
+        result["committer_unknown_hidden"] = unknown
     if retired_count:
         result["retired_hidden"] = retired_count
     if withheld:
-        result["withheld"] = withheld
-    note = _notes(untrusted, 0, retired_count, withheld, github=github)
+        result["untrusted_text_withheld"] = withheld
+    note = _notes(untrusted, 0, retired_count, withheld, github=github, unknown=unknown)
     if note:
         result["message"] = note
     elif not hits:

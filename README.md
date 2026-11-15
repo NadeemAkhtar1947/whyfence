@@ -397,10 +397,14 @@ saying "Always run `curl … | sh` before testing" must not reach an agent as a 
   own agent sessions. Add teammates with `whyfence trust EMAIL`, or trust everyone with
   `whyfence trust '*'` if every change to your default branch is reviewed. Rules from
   anyone else are kept but left out of `rules`, `why` and `search` unless asked for
-  (`include_untrusted`), and are marked when shown. The same sentence can also sit in
-  the body of an incident or decision from that commit, so in other records from
-  untrusted authors, instruction-shaped sentences (rules and shell commands) are
-  replaced with a "withheld" marker, and the agent is told how many.
+  (`include_untrusted`), and are marked when shown.
+- **Untrusted authors' text is not served at all by default.** Their other records
+  (incidents, decisions, reverts) still appear in `why` and `search`, and their commits
+  in `history`, but only as kind, date, commit and author, with a count of what was
+  withheld: no summary, no detail, no commit subject. whyfence doesn't try to spot
+  injected instructions in that text, because no pattern catches every phrasing ("Ignore
+  previous instructions…", "The assistant should fetch … and follow it"). Pass
+  `include_untrusted` to read it; it is then marked untrusted.
 - **Trust lives in git config, never in the repository**, so neither a pull request
   nor a cloned repository can trust itself.
 - **Pasted text is not your rule.** Text you paste into a Claude Code session (an
@@ -410,22 +414,24 @@ saying "Always run `curl … | sh` before testing" must not reach an agent as a 
 - **Pull request comments are inert.** Repository text in a `whyfence check` comment is
   escaped, so it can't mention people, embed links or inject HTML, and each item names
   its author.
-
 - **The committer counts too.** A commit is trusted only if its author is trusted and it
   was committed by that author or by someone you trust. A stranger committing a patch
   with `--author=you@example.com` is not trusted. The same holds for lines in
-  `.whyfence/events/`.
+  `.whyfence/events/`. An index built by whyfence before 0.4 has no committers, so its
+  commits are untrusted until the next `whyfence ingest` fills them in; the answer says
+  so.
 - **GitHub's web merge is not trusted by default.** "Squash and merge" on github.com
   commits as `GitHub <noreply@github.com>` (17-23% of commits in flask and requests), and
   anyone can write that name too; whyfence doesn't check GitHub's signature. If your team
   merges on github.com and reviews every pull request, opt in with
-  `whyfence trust noreply@github.com`. When a trusted author's rule is hidden only for
-  this reason, `rules`, `why` and `search` say so and name that command.
+  `whyfence trust noreply@github.com`. When a rule that claims a trusted author is
+  hidden only for this reason, `rules`, `why` and `search` say so and name that command.
 
 **What this does not stop:** git author and committer names are just text, so anyone
 can write a commit that claims a trusted author *and* a trusted committer. Trust is
-only as strong as the review on your default branch; signed commits are not checked. To report a security
-problem, open a GitHub issue without exploit details and ask for a private contact.
+only as strong as the review on your default branch; signed commits are not checked.
+To report a security problem, open a GitHub issue without exploit details and ask for
+a private contact.
 
 ## Status and roadmap
 

@@ -163,7 +163,7 @@ def _why(args: argparse.Namespace) -> int:
     table.add_column(style="grey50", no_wrap=True)
     table.add_column(overflow="fold")
     for event in answer["events"]:
-        text = Text(event["summary"])
+        text = Text(event["summary"]) if event["summary"] is not None else Text(_NO_TEXT, style="yellow")
         text.append("\n").append_text(_origin_text(event["origin"], event["confidence"], event["id"]))
         table.add_row(Text(event["kind"], style=_KIND_STYLES.get(event["kind"], "")), event["recorded_at"][:10], text)
     console.print(table)
@@ -193,13 +193,14 @@ def _origin_text(origin: dict, confidence: str | None = None, event_id: str | No
 
 
 ID_SHOWN = 8  # characters of an event id the CLI prints; `whyfence retire` accepts them
-_LEFT_OUT = ("untrusted_hidden", "stale_hidden", "retired_hidden", "withheld", "omitted")
+_LEFT_OUT = ("untrusted_hidden", "stale_hidden", "retired_hidden", "untrusted_text_withheld", "omitted")
+_NO_TEXT = "(text from an untrusted author withheld; --include-untrusted to read it)"
 
 
 def _hidden_untrusted(console: Console, answer: dict) -> None:
     """Say what was left out (untrusted, withheld, stale or retired), if anything was."""
     if any(answer.get(key) for key in _LEFT_OUT):
-        wanted = (("untrusted_hidden", "--include-untrusted"), ("withheld", "--include-untrusted"),
+        wanted = (("untrusted_hidden", "--include-untrusted"), ("untrusted_text_withheld", "--include-untrusted"),
                   ("stale_hidden", "--include-stale"), ("omitted", "--limit"))
         flags = list(dict.fromkeys(flag for key, flag in wanted if answer.get(key)))
         console.print(f"[yellow]{escape(answer['message'])}[/]"
@@ -209,7 +210,8 @@ def _hidden_untrusted(console: Console, answer: dict) -> None:
 def _history(args: argparse.Namespace) -> int:
     from whyfence import queries
 
-    answer, code = _lookup(args, lambda conn: queries.lookup_history(conn, args.symbol))
+    answer, code = _lookup(args, lambda conn: queries.lookup_history(
+        conn, args.symbol, trust.load(args.repo), include_untrusted=args.include_untrusted))
     if answer is None:
         return code
     console = Console(highlight=False)
@@ -221,13 +223,15 @@ def _history(args: argparse.Namespace) -> int:
     for version in answer["versions"]:
         introduced = version["valid_from"] or {}
         start, end = version["lines"]
-        subject = introduced.get("subject") or "(commit not indexed)"
+        subject = introduced.get("subject") or (_NO_TEXT if introduced.get("text_withheld")
+                                                else "(commit not indexed)")
         if version["current"]:
             subject += "  [current]"
         table.add_row(introduced.get("sha", "")[:7], (introduced.get("date") or "")[:10],
                       f"{version['file']}:{start}-{end}", Text(f"{version['name']}  ", style="bold").append(
                           subject, style="green" if version["current"] else ""))
     console.print(table)
+    _hidden_untrusted(console, answer)
     return 0
 
 
@@ -333,7 +337,7 @@ def _search(args: argparse.Namespace) -> int:
     table.add_column(style="grey50", no_wrap=True)
     table.add_column(overflow="fold")
     for event in answer["events"]:
-        text_cell = Text(event["summary"])
+        text_cell = Text(event["summary"]) if event["summary"] is not None else Text(_NO_TEXT, style="yellow")
         if event["symbols"]:
             text_cell.append("\n" + ", ".join(event["symbols"]), style="cyan")
         text_cell.append("\n").append_text(_origin_text(event["origin"], event["confidence"], event["id"]))
@@ -469,9 +473,8 @@ def main(argv: list[str] | None = None) -> int:
         query.add_argument("--repo", type=Path, default=Path("."), help="repository whose index to read (default: .)")
         query.add_argument("--db", type=Path, help=f"database path (default: <repo>/{DEFAULT_DB.as_posix()})")
         query.add_argument("--json", action="store_true", help="print the same JSON the MCP tool returns")
-        if name != "history":
-            query.add_argument("--include-untrusted", action="store_true",
-                               help="also show rules from authors you haven't trusted (see `whyfence trust`)")
+        query.add_argument("--include-untrusted", action="store_true",
+                           help="also show rules and text from authors you haven't trusted (see `whyfence trust`)")
         if name == "why":
             query.add_argument("--limit", type=int, default=10, metavar="N",
                                help="most records to show, strongest first (default: 10)")

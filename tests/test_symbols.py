@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from whyfence.trust import Trust
 from whyfence import mcp_server, store
 from whyfence.ingest import git, symbols
 from whyfence.ingest.symbols import extract_symbols, ingest_symbols, module_name
@@ -415,7 +416,7 @@ def test_indexes_whyfence_own_history(tmp_path):
         assert len(expected_versions("src/whyfence/linter.py", "discover")) >= 2
 
         # And the MCP tool reports the same timeline, with commit metadata.
-        answer = mcp_server.lookup_history(conn, "whyfence.linter.discover")
+        answer = mcp_server.lookup_history(conn, "whyfence.linter.discover", Trust(everyone=True))
         first = answer["versions"][0]
         root_commit = run_git("rev-list", "--max-parents=0", "HEAD").split()[0]
         assert first["valid_from"]["sha"] == root_commit

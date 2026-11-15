@@ -73,8 +73,12 @@ class Trust:
         """
         if not self.trusts(author):
             return False
-        if self.everyone or committer is None:  # None: indexed before committers were recorded
+        if self.everyone:
             return True
+        if committer is None:
+            # Indexed by a whyfence that didn't record committers: the author may be forged
+            # with `--author`, and nothing here can say otherwise until `whyfence ingest`.
+            return False
         return email_of(committer) == email_of(author) or self.trusts(committer)
 
     def only_github_merge(self, author: str | None, committer: str | None) -> bool:
@@ -103,8 +107,13 @@ def load(repo: Path | str) -> Trust:
 
 
 def _with_reason(where: dict[str, Any], trust: Trust) -> dict[str, Any]:
-    if not where["trusted"] and trust.only_github_merge(where["author"], where["committer"]):
-        where["untrusted_because"] = "github_web_merge"  # so the answer can say how to opt in
+    """Name the reason when it's one the user can act on, so the answer can say how."""
+    if where["trusted"] or not trust.trusts(where["author"]):
+        return where
+    if where["committer"] is None:
+        where["untrusted_because"] = "committer_unknown"  # an index from before 0.4: re-ingest
+    elif trust.only_github_merge(where["author"], where["committer"]):
+        where["untrusted_because"] = "github_web_merge"  # opt in with `whyfence trust`
     return where
 
 
