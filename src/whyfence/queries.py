@@ -6,10 +6,12 @@ so both give the same answer. Results are plain JSON-ready dicts.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from typing import Any
 
 from whyfence import store
+from whyfence.ingest.events import _CONSTRAINT_RE
 from whyfence.store import Commit, Event, Symbol
 from whyfence.trust import Trust, origin
 
@@ -98,9 +100,14 @@ def _plural(count: int, one: str, many: str) -> str:
     return f"{count} {one if count == 1 else many}"
 
 
-def _notes(untrusted: int = 0, stale: int = 0, retired_count: int = 0) -> str | None:
+def _notes(untrusted: int = 0, stale: int = 0, retired_count: int = 0, withheld: int = 0,
+           omitted: int = 0) -> str | None:
     """Say what was left out, and how to see it."""
     notes = []
+    if omitted:
+        notes.append(f"{_plural(omitted, 'weaker or older record', 'weaker or older records')} beyond the "
+                     "limit (strongest first: rules, dead ends, corrections, reverts); pass a higher "
+                     "limit to see them")
     if untrusted:
         notes.append(f"{_plural(untrusted, 'rule', 'rules')} from authors you haven't trusted (see `whyfence "
                      "trust`); pass include_untrusted=true to see them, marked")
@@ -110,16 +117,57 @@ def _notes(untrusted: int = 0, stale: int = 0, retired_count: int = 0) -> str | 
     if retired_count:
         notes.append(f"{_plural(retired_count, 'record', 'records')} retired as no longer true "
                      "(`whyfence retire --list`)")
+    if withheld:
+        notes.append(f"{_plural(withheld, 'instruction-shaped sentence', 'instruction-shaped sentences')} "
+                     "from authors you haven't trusted, inside other records; pass include_untrusted=true "
+                     "to see them")
     return "Left out: " + "; ".join(notes) + "." if notes else None
 
 
-def _event(conn: sqlite3.Connection, event: Event, where: dict[str, Any]) -> dict[str, Any]:
-    detail = event.body if len(event.body) <= DETAIL_LIMIT else event.body[:DETAIL_LIMIT] + "…"
+WITHHELD = "[instruction from an untrusted author withheld]"
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+# Shell commands are instructions however they're phrased ("... because pip install x fixes it").
+_COMMAND_RE = re.compile(
+    r"\b(?:curl|wget|pip3?\s+install|npm\s+(?:install|i)|npx|yarn\s+add|sudo|chmod|powershell|iex)\b|"
+    r"\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python3?|node)\b|\b(?:bash|sh)\s+-c\b",
+    re.I,
+)
+
+
+def withhold_instructions(text: str) -> tuple[str, int]:
+    """`text` with every instruction-shaped sentence replaced, and how many were.
+
+    For text from authors you haven't trusted. Their rules are already left out of
+    `rules` and `why`, but the same sentence can sit in the body of an incident or
+    decision from the same commit; this keeps it from reaching the agent that way.
+    Wrapped lines are joined first, so a command split across two lines is still seen.
+    """
+    sentences = [s for s in _SENTENCE_END.split(" ".join(text.split())) if s]
+    kept, withheld = [], 0
+    for sentence in sentences:
+        if _CONSTRAINT_RE.search(sentence) or _COMMAND_RE.search(sentence):
+            withheld += 1
+            if not kept or kept[-1] != WITHHELD:
+                kept.append(WITHHELD)
+        else:
+            kept.append(sentence)
+    return (" ".join(kept), withheld) if withheld else (text, 0)
+
+
+def _event(conn: sqlite3.Connection, event: Event, where: dict[str, Any], *,
+           withhold: bool = False) -> dict[str, Any]:
+    summary, body, withheld = event.summary, event.body, 0
+    if withhold:  # before truncating: a cut could split an instruction and hide it from the check
+        summary, in_summary = withhold_instructions(summary)
+        body, in_body = withhold_instructions(body)
+        withheld = in_summary + in_body
+    detail = body if len(body) <= DETAIL_LIMIT else body[:DETAIL_LIMIT] + "…"
     return {
         "id": event.id,
         "kind": event.kind,
-        "summary": event.summary,
+        "summary": summary,
         "detail": detail or None,
+        **({"withheld": withheld} if withheld else {}),
         "confidence": event.confidence,
         "recorded_at": store.to_timestamp(event.recorded_at),
         "commit": event.commit_sha,
@@ -179,8 +227,18 @@ def lookup_rules(conn: sqlite3.Connection, trust: Trust | None = None, *,
     return result
 
 
+WHY_LIMIT = 10  # records per `why` answer: flask.app.Flask had 22 (12 KB), all weak
+# Rules, dead ends, corrections and reverts say the most about what not to do; then
+# explicit records ("fix:", "Why:"); inferred ones last. Newest first within each.
+_STRENGTH = {"constraint": 0, "dead_end": 1, "correction": 2, "revert": 3}
+
+
+def _strength(event: dict[str, Any]) -> int:
+    return _STRENGTH.get(event["kind"], 4 if event["confidence"] == "EXTRACTED" else 5)
+
+
 def lookup_why(conn: sqlite3.Connection, symbol_name: str, trust: Trust | None = None, *,
-               include_untrusted: bool = False) -> dict[str, Any]:
+               include_untrusted: bool = False, limit: int = WHY_LIMIT) -> dict[str, Any]:
     """What's recorded against a symbol. Every event says where it came from and whether
     that author is trusted; constraints from untrusted authors and retired records are
     left out."""
@@ -189,7 +247,7 @@ def lookup_why(conn: sqlite3.Connection, symbol_name: str, trust: Trust | None =
     if isinstance(symbol, dict):
         return symbol
     events = []
-    untrusted = retired_count = 0
+    untrusted = retired_count = withheld = 0
     for event in store.events_for_symbol(conn, symbol.id):
         if retired(conn, event.id, trust):
             retired_count += 1
@@ -199,15 +257,24 @@ def lookup_why(conn: sqlite3.Connection, symbol_name: str, trust: Trust | None =
             untrusted += 1
             continue
         source = store.get_source(conn, event.source_id) if event.source_id else None
-        item = _event(conn, event, where)
+        item = _event(conn, event, where, withhold=not where["trusted"] and not include_untrusted)
+        withheld += item.get("withheld", 0)
         item["source"] = {"kind": source.kind, "agent": source.agent, "uri": source.uri} if source else None
         events.append(item)
+    events.sort(key=_strength)  # stable: newest first within each strength
+    limit = max(1, limit)
+    omitted = max(0, len(events) - limit)
+    events = events[:limit]
     result: dict[str, Any] = {"status": "ok", "symbol": _symbol(symbol), "events": events}
     if untrusted:
         result["untrusted_hidden"] = untrusted
     if retired_count:
         result["retired_hidden"] = retired_count
-    note = _notes(untrusted, 0, retired_count)
+    if withheld:
+        result["withheld"] = withheld
+    if omitted:
+        result["omitted"] = omitted
+    note = _notes(untrusted, 0, retired_count, withheld, omitted)
     if note:
         result["message"] = note
     elif not events:
@@ -232,7 +299,7 @@ def lookup_search(conn: sqlite3.Connection, text: str, trust: Trust | None = Non
     if not text.split():
         return {"status": "error", "query": text, "message": "Give some words to search for."}
     hits: list[dict[str, Any]] = []
-    untrusted = retired_count = 0
+    untrusted = retired_count = withheld = 0
     for event in store.search_events(conn, text, limit=limit * 3):  # room for the ones left out
         if retired(conn, event.id, trust):
             retired_count += 1
@@ -243,7 +310,8 @@ def lookup_search(conn: sqlite3.Connection, text: str, trust: Trust | None = Non
             continue
         if len(hits) == limit:
             continue
-        item = _event(conn, event, where)
+        item = _event(conn, event, where, withhold=not where["trusted"] and not include_untrusted)
+        withheld += item.get("withheld", 0)
         item["symbols"] = store.symbols_linked_to(conn, event.id)
         hits.append(item)
     result: dict[str, Any] = {"status": "ok", "query": text, "events": hits}
@@ -251,7 +319,9 @@ def lookup_search(conn: sqlite3.Connection, text: str, trust: Trust | None = Non
         result["untrusted_hidden"] = untrusted
     if retired_count:
         result["retired_hidden"] = retired_count
-    note = _notes(untrusted, 0, retired_count)
+    if withheld:
+        result["withheld"] = withheld
+    note = _notes(untrusted, 0, retired_count, withheld)
     if note:
         result["message"] = note
     elif not hits:

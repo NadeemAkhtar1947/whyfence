@@ -427,3 +427,142 @@ def test_cli_output_survives_narrow_encodings(scenario, tmp_path, monkeypatch):
         assert main(argv) == 0
         narrow.flush()
         assert narrow.buffer.getvalue()  # something was written, with unencodable characters replaced
+
+
+# --------------------------------------------------------------------------- #
+# Commit bodies wrapped at 72 columns
+# --------------------------------------------------------------------------- #
+
+WRAPPED = (
+    "Fix bytecount on streamed bodies\n"
+    "\n"
+    "Going forward, bytecount must stay a plain attribute because the C\n"
+    "extension reads it directly and a property would break it.\n"
+    "\n"
+    "- remove the property and its setter, which callers\n"
+    "  never used outside the tests\n"
+    "\n"
+    "Co-Authored-By: Someone <s@example.com>\n"
+)
+
+
+def test_wrapped_commit_sentences_are_kept_whole():
+    _, _, body = WRAPPED.partition("\n")
+    assert events.find_constraint(events._prose(body)) == (
+        "Going forward, bytecount must stay a plain attribute because the C extension reads it "
+        "directly and a property would break it.")
+
+
+def test_commit_prose_drops_wrapped_bullets_and_trailers_but_keeps_paragraphs():
+    _, _, body = WRAPPED.partition("\n")
+    prose = events._prose(body)
+    assert "callers" not in prose and "never used" not in prose  # the bullet, including its wrapped line
+    assert "Co-Authored-By" not in prose
+    assert prose.count("\n") == 0  # one paragraph left, on one line
+    two = events._prose("The first paragraph is long enough that it had to wrap at the\nedge.\n\n"
+                        "And the second one is also long enough to wrap onto a second\nline.")
+    assert two == ("The first paragraph is long enough that it had to wrap at the edge.\n"
+                   "And the second one is also long enough to wrap onto a second line.")  # paragraphs stay apart
+
+
+def test_transcript_sentences_still_split_on_newlines():
+    # In a chat, a newline usually does end a thought; keep it that way for sessions.
+    assert events.find_constraint("never call refresh() here\nthe client already retries") == \
+        "never call refresh() here"
+
+
+def test_short_lines_are_a_list_not_a_wrapped_sentence():
+    # flask 66b1b752: one item per line, no bullet markers. Joining them made a run-on "rule".
+    body = ("single default handler and formatter\ndon't remove handlers\n"
+            "configure level once using setLevel\ndocument logging\nreorganize logging tests\n")
+    assert events.find_constraint(events._prose(body)) == "don't remove handlers"
+
+
+def test_releasing_an_obligation_is_not_a_rule():
+    # flask 60a11a73: "so we don't have to keep them in sync" says the opposite of a rule.
+    for text in ("Remove the per-project files so we don't have to keep them in sync.",
+                 "With the cache, callers do not have to call refresh() any more.",
+                 "It doesn't have to run the migrations first."):
+        assert events.find_constraint(text) is None, text
+    assert events.find_constraint("You have to keep the lock while writing.") is not None
+
+
+# --------------------------------------------------------------------------- #
+# Tooling fixes are not incidents (subjects from flask, click, requests and httpx)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("subject", [
+    "Fixed formatting",
+    "Fix formatting issues",
+    "Fix style issues on master using Black",
+    "fix flake8 bugbear errors",
+    "fix pep8 with logging.py",
+    "Fix linting error.",
+    "Fixed some lint warnings",
+    "Fix Ruff UP038 warning",
+    "fix mypy finding",
+    "fix pyright type errors",
+    "fix type hint for `cli_runner.invoke`",
+    "fix annotation for g object",
+    "Fix type annotation for `before_request` and `before_app_request` decorators",
+    "Fixed indentation of an example.",
+    "Fixed trailing whitespace",
+    'Fix tox warning, test "not installed in testenv".',
+    "Fix pre-commit cache key in GitHub Actions. (#3740)",
+    "Fix ci environment command syntax (#3836)",
+    "Fixed incorrect version definitions in travis",
+    "Fixed link for good",
+    "Fixed homepage links",
+    "Fixed docstring.  This fixes #45",
+    "Fix inconsistent capitalisation and punctuation in attribute docstrings",
+    "Fixed a comment",
+    "Fix the tests and unseparate comments from code",
+    "Fixed a whole bunch of resource warnings in the flask testsuite",
+    "fix(ci): pin the runner image",
+    "fix(tests): flaky timeout",
+])
+def test_tooling_fixes_are_not_incidents(subject):
+    assert classify_commit(subject) is None, subject
+
+
+@pytest.mark.parametrize("subject", [
+    "Fixed an incorrectly formatted help text for count options.",  # user-facing output
+    "Fix string format error while we're in here.",
+    "Fix number formatting in progress bar",
+    "Fix ResourceWarning in send_file",  # a resource leak
+    "Fix URL encoding of query params",  # URLs are requests' domain
+    "Fix links header parsing",  # Response.links
+    "use setup.py test. This fixes #56",
+    "fix: refresh tokens before they expire",
+])
+def test_code_fixes_that_mention_those_words_stay_incidents(subject):
+    finding = classify_commit(subject)
+    assert finding is not None and finding.kind == "incident", subject
+
+
+@pytest.mark.parametrize("message, summary", [
+    ("Use Decimal for money\n\nWhy: float rounding broke invoice totals at month end, by a cent\nor two per line.",
+     "Use Decimal for money — float rounding broke invoice totals at month end, by a cent or two per line."),
+    ("Keep sessions in Redis\n\nThe in-process store looked simpler. We chose Redis because\n"
+     "workers restart on every deploy and users were logged out.",
+     "Keep sessions in Redis — We chose Redis because workers restart on every deploy and users were logged out."),
+    ("Switch to WAL mode so that readers never block the ingestor", "Switch to WAL mode so that readers never block "
+                                                                    "the ingestor"),  # the subject is the reason
+])
+def test_a_decision_is_summarised_with_its_reason(message, summary):
+    from datetime import datetime, timezone
+
+    from whyfence.store import Commit
+
+    commit = Commit("a" * 40, "Ada <ada@example.com>", datetime(2026, 1, 1, tzinfo=timezone.utc), message)
+    finding = classify_commit(message)
+    assert finding is not None and finding.kind == "decision"
+    assert events._commit_event(commit, finding).summary == summary
+
+
+def test_a_quoted_error_message_is_not_a_rule():
+    # psf/requests 2bb49ff3: the "must be" is inside the error being reported.
+    text = ("If encoding is None, decoding will throw the following TypeError: TypeError: unicode() "
+            "argument 2 must be string, not None")
+    assert events.find_constraint(text) is None
+    assert events.find_constraint("Callers must pass a str; a TypeError is raised otherwise.") is not None

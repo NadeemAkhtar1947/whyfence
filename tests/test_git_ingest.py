@@ -120,3 +120,29 @@ def test_outside_a_repository_is_an_error(tmp_path, isolated_git, monkeypatch):
     with pytest.raises(git.GitError):
         list(git.iter_commits(tmp_path))
     assert main(["ingest", str(tmp_path), "--db", str(tmp_path / "x.db")]) == 2
+
+
+def test_a_commit_with_a_malformed_date_does_not_stop_ingest(tmp_path, isolated_git):
+    """psf/requests 5e6ecdad has author date "2011-09-08T02:38:50+518:00" (an impossible timezone)."""
+    run_git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    run_git(tmp_path, "add", "-A")
+    run_git(tmp_path, "commit", "-q", "-m", "Before", date="2011-09-01T00:00:00+00:00")
+    tree = run_git(tmp_path, "rev-parse", "HEAD^{tree}")
+    parent = run_git(tmp_path, "rev-parse", "HEAD")
+    raw = (f"tree {tree}\nparent {parent}\n"
+           "author Kenneth <k@example.com> 1315449530 +51800\n"
+           "committer Kenneth <k@example.com> 1315449530 +51800\n\nOdd timezone\n")
+    # Bytes, not text: on Windows, text mode would write "\r\n" into the object.
+    odd = subprocess.run(["git", "-C", str(tmp_path), "hash-object", "-w", "-t", "commit", "--literally", "--stdin"],
+                         input=raw.encode(), capture_output=True, check=True).stdout.decode().strip()
+    run_git(tmp_path, "update-ref", "refs/heads/main", odd)
+    assert "+518:00" in run_git(tmp_path, "log", "-1", "--format=%aI")  # git really prints the bad date
+
+    with closing(store.connect()) as conn:
+        result = git.ingest_git(conn, tmp_path)
+        assert result.inserted == 2
+        commit = store.get_commit(conn, odd)
+    # The Unix timestamp doesn't depend on the broken timezone.
+    assert commit.authored_at == datetime.fromtimestamp(1315449530, tz=timezone.utc)
+    assert commit.subject == "Odd timezone"

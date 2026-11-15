@@ -370,7 +370,8 @@ def test_teammate_gets_shared_events_with_links(repo, tmp_path):
         assert rule["summary"] == "Never call refresh() from the request path."
         assert rule["source"]["agent"] == "codex" and rule["source"]["uri"].startswith(".whyfence/events/")
         assert rule["origin"] == {"kind": "shared", "author": "Ada <ada@example.com>",
-                                  "file": rule["source"]["uri"], "trusted": True}
+                                  "committer": "Ada <ada@example.com>", "file": rule["source"]["uri"],
+                                  "trusted": True}
         assert len(queries.lookup_rules(theirs, ada)["rules"]) == 2
         # Someone who hasn't trusted Ada gets her history but not her rules.
         assert queries.lookup_rules(theirs)["rules"] == []

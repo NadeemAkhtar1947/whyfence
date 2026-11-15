@@ -5,9 +5,9 @@ from __future__ import annotations
 import sqlite3
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from whyfence import store
 from whyfence.store import Commit
@@ -15,8 +15,10 @@ from whyfence.store import Commit
 # Fields are separated by US (0x1f). With `-z`, git ends each commit with NUL,
 # which cannot occur in a commit message, so records split unambiguously.
 _FIELD_SEP = "\x1f"
-_FORMAT = _FIELD_SEP.join(("%H", "%P", "%an", "%ae", "%aI", "%B"))
+_FORMAT = _FIELD_SEP.join(("%H", "%P", "%an", "%ae", "%aI", "%at", "%cn", "%ce", "%B"))
 _CHUNK = 1 << 16
+
+Progress = Callable[[int, int], None]  # (done, total)
 
 
 class GitError(RuntimeError):
@@ -41,14 +43,33 @@ def has_commits(repo: Path | str = ".") -> bool:
                           capture_output=True).returncode == 0
 
 
+def _parse_date(iso: str, unix: str) -> datetime:
+    """The author date, even when its timezone is impossible.
+
+    Old tools wrote dates git still prints but no parser accepts: psf/requests
+    has "2011-09-08T02:38:50+518:00". The Unix timestamp doesn't depend on the
+    timezone, so it stands in (as UTC). One bad commit must never stop ingest.
+    """
+    try:
+        return datetime.fromisoformat(iso)
+    except ValueError:
+        pass
+    try:
+        return datetime.fromtimestamp(int(unix), tz=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return datetime.fromtimestamp(0, tz=timezone.utc)
+
+
 def _parse_record(record: bytes) -> Commit:
-    sha, parents, name, email, authored_at, message = record.decode("utf-8", errors="replace").split(_FIELD_SEP, 5)
+    sha, parents, name, email, authored_iso, authored_unix, committer_name, committer_email, message = (
+        record.decode("utf-8", errors="replace").split(_FIELD_SEP, 8))
     return Commit(
         sha=sha.strip(),
         author=f"{name} <{email}>",
-        authored_at=datetime.fromisoformat(authored_at),
+        authored_at=_parse_date(authored_iso.strip(), authored_unix.strip()),
         message=message.strip(),
         parents=tuple(parents.split()),
+        committer=f"{committer_name} <{committer_email}>",
     )
 
 
@@ -140,12 +161,25 @@ class IngestResult:
     inserted: int
 
 
-def ingest_git(conn: sqlite3.Connection, repo: Path | str = ".", *, batch_size: int = 500) -> IngestResult:
+def count_commits(repo: Path | str, rev_range: str = "HEAD", *, first_parent: bool = False) -> int:
+    """How many commits `git rev-list` would list: cheap, and known before the walk starts."""
+    if not has_commits(repo):
+        return 0
+    args = ["rev-list", "--count", *(["--first-parent"] if first_parent else []), rev_range, "--"]
+    result = subprocess.run(_git(repo, *args), capture_output=True, text=True, encoding="utf-8")
+    return int(result.stdout.strip() or 0) if result.returncode == 0 else 0
+
+
+def ingest_git(conn: sqlite3.Connection, repo: Path | str = ".", *, batch_size: int = 500,
+               progress: Progress | None = None) -> IngestResult:
     """Load every commit reachable from HEAD into the commits table. Safe to re-run."""
     seen = inserted = 0
+    total = count_commits(repo) if progress else 0
     batch: list[Commit] = []
     for commit in iter_commits(repo):
         batch.append(commit)
+        if progress:
+            progress(seen + len(batch), total)
         if len(batch) >= batch_size:
             inserted += store.insert_commits(conn, batch)
             seen += len(batch)

@@ -99,6 +99,7 @@ def test_typescript_and_tsx():
         ("Repo", "class", 1, 6),
         ("Repo.key", "method", 4, 4),
         ("Repo.all", "method", 5, 5),
+        ("Shape", "class", 7, 7),  # interfaces are indexed as types since 0.4.0
         ("area", "function", 8, 8),
     ]
     tsx = "export function Button({ label }: Props) {\n  return <button>{label}</button>\n}\n"

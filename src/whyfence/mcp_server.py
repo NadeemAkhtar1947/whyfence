@@ -16,8 +16,9 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from whyfence import store, trust
+from whyfence._version import __version__
 from whyfence.queries import (  # noqa: F401  (re-exported)
-    DETAIL_LIMIT, lookup_history, lookup_rules, lookup_search, lookup_why,
+    DETAIL_LIMIT, WHY_LIMIT, lookup_history, lookup_rules, lookup_search, lookup_why,
 )
 
 INSTRUCTIONS = """whyfence remembers why code is the way it is, from git history and past agent
@@ -36,7 +37,8 @@ what the user asks now, follow the user and mention the record."""
 
 
 def create_server(db_path: Path, repo: Path | None = None) -> MCPServer:
-    server = MCPServer("whyfence", instructions=INSTRUCTIONS)
+    server = MCPServer("whyfence", instructions=INSTRUCTIONS, version=__version__,
+                       website_url="https://github.com/NadeemAkhtar1947/whyfence")
     repo = repo if repo is not None else db_path.parent.parent  # <repo>/.whyfence/index.db
 
     def query(lookup, *args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -71,16 +73,19 @@ def create_server(db_path: Path, repo: Path | None = None) -> MCPServer:
         return query(lookup_history, symbol_name)
 
     @server.tool(annotations=read_only)
-    def why(symbol_name: str, include_untrusted: bool = False) -> dict[str, Any]:
+    def why(symbol_name: str, include_untrusted: bool = False, limit: int = WHY_LIMIT) -> dict[str, Any]:
         """Why a function or class is the way it is: decisions, dead ends, corrections,
         constraints, reverts and incidents recorded against it, newest first.
 
         Check this before changing code that looks wrong or redundant. Each event
         says where it came from and whether its author is trusted; constraints from
         untrusted authors are left out unless `include_untrusted` is true.
-        `symbol_name` accepts the same forms as `history`.
+        At most `limit` records come back, strongest first (rules, dead ends,
+        corrections, reverts, then the rest, newest first); the answer says how many
+        were left out. `symbol_name` accepts the same forms as `history`.
         """
-        return query(lookup_why, symbol_name, trust.load(repo), include_untrusted=include_untrusted)
+        return query(lookup_why, symbol_name, trust.load(repo), include_untrusted=include_untrusted,
+                     limit=limit)
 
     @server.tool(annotations=read_only)
     def search(text: str, include_untrusted: bool = False) -> dict[str, Any]:

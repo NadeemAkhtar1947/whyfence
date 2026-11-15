@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from rich.console import Console
@@ -14,6 +14,7 @@ from rich.table import Table
 from rich.text import Text
 
 from whyfence import linter, store, team, trust
+from whyfence._version import __version__
 from whyfence.console import harden_streams
 from whyfence.ingest import events, git, symbols
 
@@ -24,19 +25,40 @@ def _plural(count: int, word: str) -> str:
     return f"{count} {word}{'s' * (count != 1)}"
 
 
+@contextmanager
+def _stage_progress(console: Console):
+    """One "N / total commits" bar per ingest stage; gone when done, so only the summary stays.
+
+    Nothing is drawn when output isn't a terminal (CI, `> file`), so logs stay clean.
+    """
+    from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
+
+    columns = (TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn(), TextColumn("commits"),
+               TimeElapsedColumn())
+    with Progress(*columns, console=console, transient=True, disable=not console.is_terminal) as bars:
+        def stage(description: str):
+            task = bars.add_task(description, total=None)
+
+            def report(done: int, total: int) -> None:
+                bars.update(task, completed=done, total=total or None)
+
+            return report
+
+        yield stage
+
+
 def _ingest(args: argparse.Namespace) -> int:
     console = Console(highlight=False)
     try:
         root = git.repo_root(args.repo)
         db_path = args.db or root / DEFAULT_DB
-        with closing(store.connect(db_path)) as conn:
-            commits = git.ingest_git(conn, root)
-            with console.status("Indexing functions and classes…"):
-                indexed = symbols.ingest_symbols(conn, root)
-            with console.status("Mining commits and transcripts for decisions…"):
-                mined = events.ingest_events(conn, root, projects_dir=args.transcripts, codex_dir=args.codex_dir,
-                                             gemini_dir=args.gemini_dir, transcripts=not args.no_transcripts)
-                shared = team.import_shared(conn, root)
+        with closing(store.connect(db_path)) as conn, _stage_progress(console) as stage:
+            commits = git.ingest_git(conn, root, progress=stage("Reading commits"))
+            indexed = symbols.ingest_symbols(conn, root, progress=stage("Indexing functions and classes"))
+            mined = events.ingest_events(conn, root, projects_dir=args.transcripts, codex_dir=args.codex_dir,
+                                         gemini_dir=args.gemini_dir, transcripts=not args.no_transcripts,
+                                         progress=stage("Mining commits for decisions"))
+            shared = team.import_shared(conn, root)
             total = store.count_commits(conn)
             symbol_count = store.count_symbols(conn)
     except (git.GitError, store.StoreError, symbols.SymbolError) as exc:
@@ -44,7 +66,10 @@ def _ingest(args: argparse.Namespace) -> int:
         return 2
     console.print(f"Read {_plural(commits.seen, 'commit')} from {escape(root.name)}: "
                   f"[green]{commits.inserted} new[/], {total} indexed in {escape(str(db_path))}")
-    if indexed.rebuilt:
+    if indexed.upgraded:
+        console.print("[yellow]This version of whyfence finds more kinds of definitions; "
+                      "rebuilt symbol history and re-linked commit events.[/]")
+    elif indexed.rebuilt:
         console.print("[yellow]History was rewritten since the last run; rebuilt symbol history.[/]")
     console.print(f"Walked {_plural(indexed.commits, 'commit')}: {_plural(indexed.created, 'new symbol')}, "
                   f"{_plural(indexed.versions, 'version')}, {indexed.renamed} renamed or moved, "
@@ -122,7 +147,7 @@ def _why(args: argparse.Namespace) -> int:
     from whyfence import queries
 
     answer, code = _lookup(args, lambda conn: queries.lookup_why(
-        conn, args.symbol, trust.load(args.repo), include_untrusted=args.include_untrusted))
+        conn, args.symbol, trust.load(args.repo), include_untrusted=args.include_untrusted, limit=args.limit))
     if answer is None:
         return code
     console = Console(highlight=False)
@@ -168,14 +193,15 @@ def _origin_text(origin: dict, confidence: str | None = None, event_id: str | No
 
 
 ID_SHOWN = 8  # characters of an event id the CLI prints; `whyfence retire` accepts them
-_LEFT_OUT = ("untrusted_hidden", "stale_hidden", "retired_hidden")
+_LEFT_OUT = ("untrusted_hidden", "stale_hidden", "retired_hidden", "withheld", "omitted")
 
 
 def _hidden_untrusted(console: Console, answer: dict) -> None:
-    """Say what was left out (untrusted, stale or retired), if anything was."""
+    """Say what was left out (untrusted, withheld, stale or retired), if anything was."""
     if any(answer.get(key) for key in _LEFT_OUT):
-        flags = [flag for key, flag in (("untrusted_hidden", "--include-untrusted"),
-                                        ("stale_hidden", "--include-stale")) if answer.get(key)]
+        wanted = (("untrusted_hidden", "--include-untrusted"), ("withheld", "--include-untrusted"),
+                  ("stale_hidden", "--include-stale"), ("omitted", "--limit"))
+        flags = list(dict.fromkeys(flag for key, flag in wanted if answer.get(key)))
         console.print(f"[yellow]{escape(answer['message'])}[/]"
                       + (f" [grey50]({', '.join(flags)})[/]" if flags else ""))
 
@@ -407,6 +433,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="whyfence",
         description="Temporal memory for coding agents: why the code is the way it is.",
     )
+    parser.add_argument("--version", action="version", version=f"whyfence {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
     linter.add_arguments(commands.add_parser(
         "lint",
@@ -445,6 +472,9 @@ def main(argv: list[str] | None = None) -> int:
         if name != "history":
             query.add_argument("--include-untrusted", action="store_true",
                                help="also show rules from authors you haven't trusted (see `whyfence trust`)")
+        if name == "why":
+            query.add_argument("--limit", type=int, default=10, metavar="N",
+                               help="most records to show, strongest first (default: 10)")
         if name == "rules":
             query.add_argument("--include-stale", action="store_true",
                                help="also show rules about code that has since been deleted")

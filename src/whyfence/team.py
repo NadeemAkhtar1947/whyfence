@@ -79,35 +79,37 @@ def _local_identity(repo: Path) -> str | None:
     return f"{git.config_value(repo, 'user.name') or ''} <{email}>".strip() if email else None
 
 
-def line_authors(repo: Path, rel: str) -> dict[int, str | None]:
-    """Who committed each line of a file ("Name <email>"), from `git blame`.
+def line_authors(repo: Path, rel: str) -> dict[int, tuple[str | None, str | None]]:
+    """(author, committer) of the commit that added each line of a file, from `git blame`.
 
-    Lines not committed yet, and files git doesn't track, are this checkout's
-    own: they're attributed to the local git identity.
+    Both as "Name <email>". Lines not committed yet, and files git doesn't track,
+    are this checkout's own: both are the local git identity.
     """
     local = _local_identity(repo)
     result = subprocess.run(git._git(repo, "blame", "--line-porcelain", "--", rel), capture_output=True,
                             text=True, encoding="utf-8", errors="replace")
+    lines: dict[int, tuple[str | None, str | None]] = defaultdict(lambda: (local, local))
     if result.returncode != 0:
-        return defaultdict(lambda: local)
-    authors: dict[int, str | None] = defaultdict(lambda: local)
+        return lines
     line = 0
-    sha = name = mail = ""
+    sha = ""
+    fields: dict[str, str] = {}
     for row in result.stdout.splitlines():
         if row.startswith("\t"):
             if sha == _UNCOMMITTED:
-                authors[line] = local
+                lines[line] = (local, local)
             else:
-                authors[line] = f"{name} {mail}".strip()
-        elif row.startswith("author "):
-            name = row[len("author "):]
-        elif row.startswith("author-mail "):
-            mail = row[len("author-mail "):]
-        else:
-            parts = row.split(" ")
-            if len(parts) >= 3 and len(parts[0]) >= 40 and all(c in "0123456789abcdef" for c in parts[0]):
-                sha, line, name, mail = parts[0], int(parts[2]), "", ""
-    return authors
+                lines[line] = (f"{fields.get('author', '')} {fields.get('author-mail', '')}".strip(),
+                               f"{fields.get('committer', '')} {fields.get('committer-mail', '')}".strip())
+            continue
+        key, _, value = row.partition(" ")
+        if key in ("author", "author-mail", "committer", "committer-mail"):
+            fields[key] = value
+            continue
+        parts = row.split(" ")
+        if len(parts) >= 3 and len(parts[0]) >= 40 and all(c in "0123456789abcdef" for c in parts[0]):
+            sha, line, fields = parts[0], int(parts[2]), {}
+    return lines
 
 
 def _worth_sharing(conn: sqlite3.Connection, event: Event) -> bool:
@@ -170,12 +172,13 @@ def import_shared(conn: sqlite3.Connection, repo: Path) -> int:
         authors = line_authors(root, rel)
         for number, record in _numbered_records(path):
             agent = record.get("agent") if isinstance(record.get("agent"), str) else None
-            author = authors[number]
+            author, committer = authors[number]
             if "retires" in record:
                 _import_retirement(conn, record, author, rel)
                 continue
             # One source per file, agent and committer: trust is decided by who committed the line.
-            source_id = f"shared:{path.name}:{agent}:{trust.email_of(author) or 'unknown'}"
+            source_id = (f"shared:{path.name}:{agent}:{trust.email_of(author) or 'unknown'}"
+                         f":{trust.email_of(committer) or 'unknown'}")
             event = _valid_event(record, source_id)
             if event is None or store.get_event(conn, event.id) is not None:
                 continue
@@ -189,7 +192,8 @@ def import_shared(conn: sqlite3.Connection, repo: Path) -> int:
                     links.append((symbol, link["relation"]))
             with store.batch(conn):
                 store.insert_source(conn, Source(source_id, "transcript", agent=agent, uri=rel,
-                                                 captured_at=event.recorded_at, author=author))
+                                                 captured_at=event.recorded_at, author=author,
+                                                 committer=committer))
                 store.insert_event(conn, event, links)
             added += 1
     return added

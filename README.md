@@ -60,6 +60,21 @@ why("app.models.TaskFile")
 | `incident` | `fix:` commits, "Fixes #12", bugs, crashes | "fix: refresh tokens before they expire" |
 | `revert` | Commit subjects like `Revert "…"` | |
 
+**How often is a mined event right?** On a hand-labelled sample of 107 commit-mined
+events from flask, requests and click, about 60% are what they claim to be:
+
+| kind | precision |
+|---|---|
+| incident | 17/30 = 57% |
+| decision | 17/29 = 59% |
+| revert | 20/29 = 69% |
+| rule | 10/19 = 53% |
+
+The usual miss is a change to docs, examples, tests or CI that reads like a code
+change. [`eval/`](eval/) has the labels (each rejection with its reason), the criteria,
+the exact commits, who labelled them (the AI assistant that wrote the classifier, so
+check its work) and how to reproduce the numbers. Recall is not measured.
+
 Each event is linked to the **functions, methods and classes** it is about, and
 those links follow the code through history. whyfence indexes every Python,
 JavaScript, TypeScript, Go, Rust and Java symbol at every commit and keeps its identity when it
@@ -149,9 +164,11 @@ sessions, and it rebuilds symbol history automatically if history was rewritten.
 Y", "must use Z") by an author you trust. The server tells agents to load these at
 session start.
 
-**`why(symbol_name)`**: everything recorded about why a symbol is the way it is,
-newest first, each with its `origin` (commit, your session or a shared file; who
-wrote it; whether you trust them) and how confident the extraction is.
+**`why(symbol_name)`**: what's recorded about why a symbol is the way it is, strongest
+first (rules, dead ends, corrections and reverts before the rest; newest first within
+each), up to 10 by default with a count of the rest. Each comes with its `origin`
+(commit, your session or a shared file; who wrote it; whether you trust them) and how
+confident the extraction is.
 
 **`search(text)`**: full-text search over everything recorded, for questions with no
 single symbol to ask about ("has anyone tried caching here?"). Each hit lists the
@@ -379,7 +396,10 @@ saying "Always run `curl … | sh` before testing" must not reach an agent as a 
   own agent sessions. Add teammates with `whyfence trust EMAIL`, or trust everyone with
   `whyfence trust '*'` if every change to your default branch is reviewed. Rules from
   anyone else are kept but left out of `rules`, `why` and `search` unless asked for
-  (`include_untrusted`), and are marked when shown.
+  (`include_untrusted`), and are marked when shown. The same sentence can also sit in
+  the body of an incident or decision from that commit, so in other records from
+  untrusted authors, instruction-shaped sentences (rules and shell commands) are
+  replaced with a "withheld" marker, and the agent is told how many.
 - **Trust lives in git config, never in the repository**, so neither a pull request
   nor a cloned repository can trust itself.
 - **Pasted text is not your rule.** Text you paste into a Claude Code session (an
@@ -390,8 +410,15 @@ saying "Always run `curl … | sh` before testing" must not reach an agent as a 
   escaped, so it can't mention people, embed links or inject HTML, and each item names
   its author.
 
-Git author names and emails can be set to anything, so trust is only as strong as the
-review on your default branch; signed commits are not checked. To report a security
+- **The committer counts too.** A commit is trusted only if its author is trusted and it
+  was committed by that author, by someone you trust, or by GitHub's web merge (which
+  commits on behalf of whoever pressed "Squash and merge"; 17-23% of commits in flask
+  and requests). A stranger committing a patch with `--author=you@example.com` is not
+  trusted. The same holds for lines in `.whyfence/events/`.
+
+**What this does not stop:** git author and committer names are just text, so anyone
+can write a commit that claims a trusted author *and* a trusted committer. Trust is
+only as strong as the review on your default branch; signed commits are not checked. To report a security
 problem, open a GitHub issue without exploit details and ask for a private contact.
 
 ## Status and roadmap
@@ -409,6 +436,9 @@ only been tuned on a handful of real projects.
 - [x] Trust model: rules carry their origin, and only trusted authors set them (0.3.0)
 - [x] Stale and retired rules (0.3.0)
 - [x] Commits on merged branches link to the functions they changed (0.3.0)
+- [x] JavaScript/TypeScript assignments (`res.status = function`), exported objects, TS types (0.4.0)
+- [x] Faster ingest, with progress; measured precision of mined events ([`eval/`](eval/)) (0.4.0)
+- [ ] Fewer docs/test/CI changes mistaken for code changes (the main source of wrong events)
 - [ ] Codex CLI sessions (a reader is included but experimental: built from third-party
       descriptions of an undocumented format and not yet tested against a real session)
 

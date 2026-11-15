@@ -11,6 +11,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from whyfence import mcp_server, store
 from whyfence.store import Commit, Event, Source, Symbol, SymbolVersion
+from whyfence.trust import Trust
 
 T0 = datetime(2026, 3, 1, tzinfo=timezone.utc)
 
@@ -74,14 +75,14 @@ def test_history_marks_commits_that_were_never_ingested(conn):
     assert version["valid_from"] == {"sha": "c" * 40, "ingested": False}
 
 
-def test_why_returns_live_events_newest_first(conn):
+def test_why_returns_live_events_strongest_first(conn):
     result = mcp_server.lookup_why(conn, "s-auth")
     kinds = [(e["kind"], e["summary"]) for e in result["events"]]
     assert kinds == [
+        ("dead_end", "A global refresh lock deadlocked under load"),  # a dead end outranks a newer decision
         ("decision", "Refresh proactively 60s before expiry"),
-        ("dead_end", "A global refresh lock deadlocked under load"),
     ]  # the superseded decision is not reported
-    decision, dead_end = result["events"]
+    dead_end, decision = result["events"]
     assert decision["source"] == {"kind": "transcript", "agent": "claude-code", "uri": "session/42"}
     assert decision["commit"] == "b" * 40
     assert len(decision["detail"]) == mcp_server.DETAIL_LIMIT + 1 and decision["detail"].endswith("…")
@@ -137,7 +138,7 @@ def test_stdio_server_end_to_end(db_path):
     assert not why.is_error
     payload = why.structured_content  # dict results are sent as structured output
     assert json.loads(why.content[0].text) == payload  # with a JSON text copy for older clients
-    assert [e["kind"] for e in payload["events"]] == ["decision", "dead_end"]
+    assert [e["kind"] for e in payload["events"]] == ["dead_end", "decision"]  # strongest first
     assert not history.is_error
     payload = history.structured_content
     assert len(payload["versions"]) == 2
@@ -170,3 +171,74 @@ def test_search_over_stdio_and_cli(db_path, capsys):
     out = capsys.readouterr().out
     assert "deadlocked" in out and "app.auth.refresh" in out
     assert main(["search", "   ", "--db", str(db_path)]) == 1
+
+
+# --------------------------------------------------------------------------- #
+# A busy symbol: strongest records first, a bounded answer, and a count of the rest
+# --------------------------------------------------------------------------- #
+
+def busy_symbol(conn) -> None:
+    store.upsert_symbol(conn, Symbol("s-app", "class", "app.App", "python"))
+    store.insert_source(conn, Source("t1", "transcript", agent="claude-code", uri="s/1", captured_at=T0))
+    for i in range(30):  # old, weak: "Fixes #N" subjects
+        store.insert_event(conn, Event("incident", f"Tweak {i}. Fixes #{i}", confidence="INFERRED",
+                                       recorded_at=T0 + timedelta(days=i), body="x" * 600),
+                           links=[("s-app", "about")])
+    strong = [("incident", "fix: app crashed on empty config", "EXTRACTED", 1),
+              ("revert", 'Revert "Lazy-load extensions"', "EXTRACTED", 2),
+              ("correction", "No, don't cache the app instance", "INFERRED", 3),
+              ("dead_end", "A per-request app copy deadlocked", "INFERRED", 4),
+              ("constraint", "Never create App() at import time", "INFERRED", 5)]
+    for kind, summary, confidence, day in strong:
+        store.insert_event(conn, Event(kind, summary, source_id="t1", confidence=confidence,
+                                       recorded_at=T0 + timedelta(days=day)), links=[("s-app", "about")])
+
+
+def test_why_ranks_strong_records_first_and_says_what_it_left_out():
+    with closing(store.connect()) as conn:
+        busy_symbol(conn)
+        answer = mcp_server.lookup_why(conn, "app.App", Trust(everyone=True))
+    kinds = [e["kind"] for e in answer["events"]]
+    assert kinds[:5] == ["constraint", "dead_end", "correction", "revert", "incident"]
+    assert answer["events"][4]["confidence"] == "EXTRACTED"
+    assert len(answer["events"]) == mcp_server.WHY_LIMIT
+    assert answer["omitted"] == 35 - mcp_server.WHY_LIMIT
+    assert "limit" in answer["message"]
+    assert len(json.dumps(answer)) < 8_000  # small enough for an agent's context
+
+
+def test_why_limit_can_be_raised_and_weak_records_stay_newest_first():
+    with closing(store.connect()) as conn:
+        busy_symbol(conn)
+        everything = mcp_server.lookup_why(conn, "app.App", Trust(everyone=True), limit=100)
+    assert len(everything["events"]) == 35 and "omitted" not in everything
+    weak = [e["summary"] for e in everything["events"][5:]]
+    assert weak[0] == "Tweak 29. Fixes #29" and weak[-1] == "Tweak 0. Fixes #0"
+
+
+# --------------------------------------------------------------------------- #
+# Which whyfence is this?
+# --------------------------------------------------------------------------- #
+
+def test_cli_reports_its_version(capsys):
+    from importlib.metadata import version
+
+    from whyfence.cli import main
+
+    with pytest.raises(SystemExit) as stop:
+        main(["--version"])
+    assert stop.value.code == 0
+    assert capsys.readouterr().out.strip() == f"whyfence {version('whyfence')}"
+
+
+def test_mcp_server_reports_its_version_to_clients(db_path):
+    from importlib.metadata import version
+
+    async def handshake():
+        params = StdioServerParameters(command=sys.executable, args=["-m", "whyfence", "mcp", "--db", str(db_path)])
+        with anyio.fail_after(60):
+            async with stdio_client(params) as (read, write), ClientSession(read, write) as client:
+                return await client.initialize()
+
+    info = anyio.run(handshake).server_info
+    assert info.name == "whyfence" and info.version == version("whyfence")

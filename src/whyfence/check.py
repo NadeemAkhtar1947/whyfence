@@ -23,6 +23,7 @@ from typing import Any
 from whyfence import store, team, trust
 from whyfence.store import Event
 from whyfence.ingest import git, symbols
+from whyfence.ingest.events import _prose as commit_prose
 
 MARKER = "<!-- whyfence-check -->"  # lets the Action find and update its own comment
 MAX_SYMBOLS = 20
@@ -100,30 +101,14 @@ def is_fence(event: Event) -> bool:
     return event.kind in STRONG_KINDS or event.confidence == "EXTRACTED"
 
 
-_BULLET = re.compile(r"^\s*([*+-]|\d+[.)])\s")
-_TRAILER = re.compile(r"^[A-Z][\w-]*-by:\s|^Change-Id:\s", re.I)  # Co-Authored-By:, Signed-off-by:, ...
-
-
 def _excerpt(body: str) -> str | None:
     """The prose of a commit body, if it has any: what a reviewer reads as the reason.
 
-    Bullet lists are dropped with their wrapped continuation lines (squash merges list
-    every commit on the branch that way, and half a bullet reads as nonsense), and so
-    are trailers such as Co-Authored-By.
+    The same reading mining uses: bullet lists (squash merges list every commit on the
+    branch that way, and half a bullet reads as nonsense) and trailers such as
+    Co-Authored-By are dropped, and wrapped lines are joined.
     """
-    kept: list[str] = []
-    in_bullet = False
-    for line in body.splitlines():
-        if _BULLET.match(line):
-            in_bullet = True
-        elif in_bullet and line[:1].isspace() and line.strip():
-            pass  # a bullet's wrapped continuation
-        elif _TRAILER.match(line):
-            in_bullet = False
-        else:
-            in_bullet = False
-            kept.append(line)
-    text = " ".join(" ".join(kept).split())
+    text = " ".join(commit_prose(body).split())
     if not text:
         return None
     return text if len(text) <= DETAIL_LIMIT else text[:DETAIL_LIMIT].rsplit(" ", 1)[0] + "…"

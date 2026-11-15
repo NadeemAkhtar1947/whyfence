@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 
 EVENT_KINDS = ("decision", "dead_end", "correction", "constraint", "revert", "incident")
 SOURCE_KINDS = ("commit", "pr", "transcript", "adr", "manual")
@@ -42,13 +42,21 @@ CREATE TABLE retirements (
 CREATE INDEX retirements_event ON retirements (event_id);
 """
 
+# "Which symbols did this commit change?" is asked once per commit event. Without
+# these, each answer scanned every version: 381 ms a call on django (256k versions).
+VERSION_BOUNDS = """
+CREATE INDEX symbol_versions_from ON symbol_versions (valid_from_sha);
+CREATE INDEX symbol_versions_to ON symbol_versions (valid_to_sha) WHERE valid_to_sha IS NOT NULL;
+"""
+
 SCHEMA = RETIREMENTS + f"""
 CREATE TABLE commits (
     sha         TEXT PRIMARY KEY,
     author      TEXT NOT NULL,            -- "Name <email>"
     authored_at TEXT NOT NULL,
     message     TEXT NOT NULL,
-    parents     TEXT NOT NULL DEFAULT ''  -- space-separated parent SHAs
+    parents     TEXT NOT NULL DEFAULT '', -- space-separated parent SHAs
+    committer   TEXT                      -- "Name <email>"; NULL if indexed before 0.4
 );
 CREATE INDEX commits_authored_at ON commits (authored_at);
 
@@ -73,7 +81,7 @@ CREATE TABLE symbol_versions (
 );
 CREATE INDEX symbol_versions_file ON symbol_versions (file_path);
 CREATE INDEX symbol_versions_current ON symbol_versions (symbol_id) WHERE valid_to_sha IS NULL;
-
+{VERSION_BOUNDS}
 CREATE TABLE sources (
     id           TEXT PRIMARY KEY,
     kind         TEXT NOT NULL CHECK (kind IN {SOURCE_KINDS}),
@@ -81,7 +89,8 @@ CREATE TABLE sources (
     uri          TEXT,
     content_hash TEXT,
     captured_at  TEXT NOT NULL,
-    author       TEXT                     -- who committed it ("Name <email>"), for shared events
+    author       TEXT,                    -- for shared events: the author of the commit that added the line
+    committer    TEXT                     -- and its committer
 );
 
 CREATE TABLE events (
@@ -146,6 +155,18 @@ DELETE FROM events WHERE source_id LIKE 'shared:%' OR source_id LIKE 'commit:%';
 DELETE FROM sources WHERE id LIKE 'shared:%' OR id LIKE 'commit:%';
 {RETIREMENTS}
 """,
+    # 0.4: indexes for "which symbols did this commit change?".
+    3: VERSION_BOUNDS,
+    # 0.4: committers, so a stranger can't commit in a trusted author's name. Shared events
+    # are re-read from .whyfence/events/ to pick up theirs; commits get theirs on the next ingest.
+    4: """
+ALTER TABLE commits ADD COLUMN committer TEXT;
+ALTER TABLE sources ADD COLUMN committer TEXT;
+UPDATE events SET superseded_by = NULL
+ WHERE superseded_by IN (SELECT id FROM events WHERE source_id LIKE 'shared:%');
+DELETE FROM events WHERE source_id LIKE 'shared:%';
+DELETE FROM sources WHERE id LIKE 'shared:%';
+""",
 }
 
 
@@ -169,6 +190,7 @@ class Commit:
     authored_at: datetime
     message: str
     parents: tuple[str, ...] = ()
+    committer: str | None = None  # "Name <email>"
 
     @property
     def subject(self) -> str:
@@ -204,6 +226,7 @@ class Source:
     content_hash: str | None = None
     captured_at: datetime = field(default_factory=_now)
     author: str | None = None
+    committer: str | None = None
 
 
 @dataclass(frozen=True)
@@ -300,19 +323,28 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 def _commit_from_row(row: sqlite3.Row) -> Commit:
     return Commit(row["sha"], row["author"], from_timestamp(row["authored_at"]), row["message"],
-                  tuple(row["parents"].split()))
+                  tuple(row["parents"].split()), row["committer"])
 
 
 def insert_commits(conn: sqlite3.Connection, commits: Iterable[Commit]) -> int:
-    """Insert commits, skipping SHAs already stored. Returns how many were new."""
-    rows = [(c.sha, c.author, to_timestamp(c.authored_at), c.message, " ".join(c.parents)) for c in commits]
+    """Insert commits, skipping SHAs already stored. Returns how many were new.
+
+    A commit stored before committers were recorded gets its committer filled in.
+    """
+    commits = list(commits)
+    rows = [(c.sha, c.author, to_timestamp(c.authored_at), c.message, " ".join(c.parents), c.committer)
+            for c in commits]
     with _tx(conn):
         before = conn.total_changes
         conn.executemany(
-            "INSERT OR IGNORE INTO commits (sha, author, authored_at, message, parents) VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO commits (sha, author, authored_at, message, parents, committer) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             rows,
         )
-        return conn.total_changes - before
+        inserted = conn.total_changes - before
+        conn.executemany("UPDATE commits SET committer = ? WHERE sha = ? AND committer IS NULL",
+                         [(c.committer, c.sha) for c in commits if c.committer])
+        return inserted
 
 
 def get_commit(conn: sqlite3.Connection, sha: str) -> Commit | None:
@@ -477,6 +509,19 @@ def clear_symbol_versions(conn: sqlite3.Connection) -> None:
         conn.execute("DELETE FROM symbol_versions")
 
 
+def forget_commit_events(conn: sqlite3.Connection) -> None:
+    """Drop events mined from commit messages; the next ingest re-mines (and re-links) them from git.
+
+    Retirements are kept: they refer to event ids, which are derived from the commit, so a
+    retired commit event stays retired when it comes back.
+    """
+    with _tx(conn):
+        conn.execute("""UPDATE events SET superseded_by = NULL
+                        WHERE superseded_by IN (SELECT id FROM events WHERE source_id LIKE 'commit:%')""")
+        conn.execute("DELETE FROM events WHERE source_id LIKE 'commit:%'")
+        conn.execute("DELETE FROM sources WHERE id LIKE 'commit:%'")
+
+
 def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
     row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
     return row[0] if row else None
@@ -543,10 +588,10 @@ def symbols_as_of(conn: sqlite3.Connection, when: datetime) -> list[tuple[Symbol
 def insert_source(conn: sqlite3.Connection, source: Source) -> None:
     with _tx(conn):
         conn.execute(
-            """INSERT OR IGNORE INTO sources (id, kind, agent, uri, content_hash, captured_at, author)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT OR IGNORE INTO sources (id, kind, agent, uri, content_hash, captured_at, author, committer)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (source.id, source.kind, source.agent, source.uri, source.content_hash,
-             to_timestamp(source.captured_at), source.author),
+             to_timestamp(source.captured_at), source.author, source.committer),
         )
 
 
@@ -555,7 +600,7 @@ def get_source(conn: sqlite3.Connection, source_id: str) -> Source | None:
     if row is None:
         return None
     return Source(row["id"], row["kind"], row["agent"], row["uri"], row["content_hash"],
-                  from_timestamp(row["captured_at"]), row["author"])
+                  from_timestamp(row["captured_at"]), row["author"], row["committer"])
 
 
 def insert_event(
@@ -714,8 +759,9 @@ def find_event_ids(conn: sqlite3.Connection, prefix: str) -> list[str]:
     prefix = prefix.lower()
     if not prefix or any(c not in "0123456789abcdef" for c in prefix):
         return []  # ids are hex; anything else can't match
-    return [row[0] for row in conn.execute("SELECT id FROM events WHERE substr(id, 1, ?) = ? LIMIT 5",
-                                           (len(prefix), prefix))]
+    # A range on the primary key ("g" sorts after every hex digit), so it's a lookup, not a scan.
+    return [row[0] for row in conn.execute("SELECT id FROM events WHERE id >= ? AND id < ? LIMIT 5",
+                                           (prefix, prefix + "g"))]
 
 
 def is_current(conn: sqlite3.Connection, symbol_id: str) -> bool:

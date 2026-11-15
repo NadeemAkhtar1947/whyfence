@@ -31,6 +31,9 @@ from whyfence.ingest import git
 from whyfence.store import Event
 
 CONFIG_KEY = "whyfence.trust"
+# "Squash and merge" / "Rebase and merge" on github.com commit as GitHub on behalf of whoever
+# pressed the button; on most GitHub repositories that is how every pull request lands.
+GITHUB_WEB_MERGE = "noreply@github.com"
 EVERYONE = "*"
 _EMAIL_RE = re.compile(r"<([^<>]*)>\s*$")
 
@@ -57,6 +60,21 @@ class Trust:
         address = email_of(author)
         return address is not None and address in self.emails
 
+    def trusts_commit(self, author: str | None, committer: str | None) -> bool:
+        """A trusted author, committed by that author, by someone trusted, or by GitHub's web merge.
+
+        Stops a stranger committing a patch in a trusted author's name (`--author`), or
+        rebasing one in. It cannot stop a forgery: both names are just text, so anyone
+        can write a commit that claims a trusted author *and* committer. Only review of
+        what lands on your default branch (or signed commits, not checked here) does.
+        """
+        if not self.trusts(author):
+            return False
+        if self.everyone or committer is None:  # None: indexed before committers were recorded
+            return True
+        committed_by = email_of(committer)
+        return committed_by in (email_of(author), GITHUB_WEB_MERGE) or self.trusts(committer)
+
 
 def configured(repo: Path | str) -> list[str]:
     """The `whyfence.trust` values, from every git config level."""
@@ -81,12 +99,13 @@ def origin(conn: sqlite3.Connection, event: Event, trust: Trust) -> dict[str, An
     """Where an event came from, who wrote it, and whether that author is trusted."""
     source = store.get_source(conn, event.source_id) if event.source_id else None
     if source is not None and event.source_id and event.source_id.startswith("shared:"):
-        return {"kind": "shared", "author": source.author, "file": source.uri,
-                "trusted": trust.trusts(source.author)}
+        return {"kind": "shared", "author": source.author, "committer": source.committer, "file": source.uri,
+                "trusted": trust.trusts_commit(source.author, source.committer)}
     if event.commit_sha or (source is not None and source.kind == "commit"):
         commit = store.get_commit(conn, event.commit_sha) if event.commit_sha else None
-        author = commit.author if commit else None
-        return {"kind": "commit", "author": author, "commit": event.commit_sha, "trusted": trust.trusts(author)}
+        author, committer = (commit.author, commit.committer) if commit else (None, None)
+        return {"kind": "commit", "author": author, "committer": committer, "commit": event.commit_sha,
+                "trusted": trust.trusts_commit(author, committer)}
     if source is not None and source.kind == "transcript":
         return {"kind": "session", "agent": source.agent, "author": None, "trusted": True}
     return {"kind": source.kind if source else "unknown", "author": None, "trusted": trust.everyone}

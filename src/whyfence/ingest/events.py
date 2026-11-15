@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -34,7 +35,7 @@ from whyfence.ingest import agent_logs, git
 from whyfence.ingest.agent_logs import AgentSession, parse_timestamp as _parse_timestamp
 from whyfence.ingest.agent_logs import Turn as _Turn
 from whyfence.ingest.symbols import _unquote as unquote_path
-from whyfence.ingest.symbols import extract_symbols, language_for, module_name, qualify
+from whyfence.ingest.symbols import LANGUAGES, extract_symbols, language_for, module_name, qualify
 from whyfence.store import Commit, Event, Source
 
 SUMMARY_LIMIT = 300
@@ -51,12 +52,34 @@ CORRECTION_ANYWHERE_LIMIT = 300  # long messages are instructions; only short on
 # Subject only: a squash merge's body lists every commit on the branch, reverts included.
 _REVERT_RE = re.compile(r'^Revert "|^revert(?:\([^)]*\))?!?:', re.I)
 _CONVENTIONAL_RE = re.compile(r"^([A-Za-z]+)(?:\([^)]*\))?!?:")
+_SCOPE_RE = re.compile(r"^[A-Za-z]+\(([^)]*)\)!?:")  # `fix(ci): ...` -> "ci"
 _FIX_TYPES = {"fix", "bugfix", "hotfix"}
 _FIX_SUBJECT_RE = re.compile(r"^fix(?:e[sd])?\b|\bbugs?\b|\bregression\b|\bcrash(?:es|ed|ing)?\b", re.I)
 _FIXES_ISSUE_RE = re.compile(r"\bfix(?:es|ed)?\s+#\d+", re.I)
 # Correcting prose isn't an incident anyone needs to know about before changing the code.
 _TRIVIAL_FIX_RE = re.compile(r"\b(?:typos?|spelling|grammar|docs?|documentation|readme|changelog)\b", re.I)
-_BULLET_RE = re.compile(r"^\s*[-*•]\s")
+# Nor is fixing the tooling around the code. These match the phrasing of a tooling fix,
+# not bare words: "formatted help text", "string format error", "Fix links header parsing"
+# and "Fix URL encoding" are real bugs (in click and requests), so they must stay incidents.
+_TOOLING_FIX_RE = re.compile(
+    # Formatting and style, when that's the whole point ("Fixed formatting", "formatting issues").
+    r"\bformatting\b\s*(?:$|[.(:]|issues?\b|errors?\b|problems?\b)|\breformat\w*|\bcode style\b|"
+    r"\bstyle (?:issues?|errors?|problems?|fixes?|checks?)\b|\b(?:using|with|run(?:ning)?|ran)\s+black\b|"
+    r"\bwhitespace\b|\bindent(?:ation|ing)?\b|"
+    # Linters, type checkers and type-only changes.
+    r"\b(?:lint\w*|flake8|pep ?8|pylint|ruff|isort|mypy|pyright|typing)\b|"
+    r"\btype[- ](?:hints?|annotations?|errors?|check\w*)\b|\bannotations?\b|"
+    # Tests and CI.
+    r"\bfix(?:e[sd]|ing)?\s+(?:the\s+|a\s+|some\s+|broken\s+|failing\s+|flaky\s+)*(?:unit\s+)?tests?\b|"
+    r"\btest ?suite\b|\b(?:broken|failing|flaky)\s+tests?\b|"
+    r"\b(?:ci|tox|travis|appveyor|circleci|github actions|pre-commit|codecov)\b|"
+    # Links, docstrings and comments.
+    r"^fix(?:e[sd])?\s+(?:the\s+|a\s+|some\s+|broken\s+|dead\s+|\w+\s+)?links?\b\s*(?:$|[.(]|for good\b|in\b|to\b)|"
+    r"\b(?:broken|dead)\s+links?\b|\bdocstrings?\b|\bcomments?\b",
+    re.I,
+)
+_TOOLING_SCOPES = {"ci", "test", "tests", "lint", "style", "format", "typing", "types", "docs", "build", "deps"}
+_BULLET_RE = re.compile(r"^\s*(?:[-*+•]|\d+[.)])\s")  # "- x", "* x", "• x", "1. x", "2) x"
 _RATIONALE_HEADER_RE = re.compile(r"^\s*(?:why|rationale|reason|motivation)\s*:", re.I | re.M)
 # "why" alone is usually a noun ("the why tool"); only rationale phrasing counts.
 _RATIONALE_RE = re.compile(
@@ -72,9 +95,49 @@ class CommitFinding:
     confidence: str
 
 
+_TRAILER_RE = re.compile(r"^[A-Z][\w-]*-by:\s|^Change-Id:\s", re.I)  # Co-Authored-By:, Signed-off-by:, ...
+# Bodies wrap at 60-80 columns, so a wrapped line is nearly full. A shorter line ended on
+# purpose: flask 66b1b752 lists "don't remove handlers" (21) among items of 16-36 characters,
+# while its wrapped prose runs 68-71.
+WRAPPED_LINE = 45
+
+
 def _prose(message: str) -> str:
-    """A commit message without bullet lines, which list changes rather than explain them."""
-    return "\n".join(line for line in message.splitlines() if not _BULLET_RE.match(line))
+    """The explaining part of a commit message: one line per paragraph.
+
+    Commit bodies are wrapped at about 72 columns, so a newline inside a paragraph
+    is not the end of a sentence: lines are joined, and only blank lines separate
+    paragraphs. Bullet items (with their wrapped continuation lines) list changes
+    rather than explain them, and trailers such as Co-Authored-By are metadata, so
+    both are left out. Agent sessions don't go through here: in a chat, a newline
+    usually does end a thought.
+    """
+    paragraphs: list[str] = []
+    current: list[str] = []
+    in_bullet = False
+    for line in message.splitlines():
+        if current and len(current[-1]) < WRAPPED_LINE:
+            # The previous line stopped short of the wrap width: a deliberate break (a list
+            # written without markers, say), not a sentence running on. Keep it on its own.
+            paragraphs.append(" ".join(current))
+            current = []
+        if not line.strip():
+            if current:
+                paragraphs.append(" ".join(current))
+                current = []
+            in_bullet = False
+        elif _BULLET_RE.match(line):
+            in_bullet = True
+        elif in_bullet and line[:1].isspace():
+            pass  # a bullet's wrapped continuation
+        elif _TRAILER_RE.match(line):
+            in_bullet = False
+        else:
+            in_bullet = False
+            current.append(line.strip())
+    if current:
+        paragraphs.append(" ".join(current))
+    return "\n".join(paragraphs)
 
 
 def classify_commit(message: str) -> CommitFinding | None:
@@ -86,7 +149,9 @@ def classify_commit(message: str) -> CommitFinding | None:
         return CommitFinding("revert", "EXTRACTED")
     conventional = _CONVENTIONAL_RE.match(subject)
     commit_type = conventional.group(1).lower() if conventional else None
-    trivial = _TRIVIAL_FIX_RE.search(subject) is not None
+    scope = _SCOPE_RE.match(subject)
+    trivial = (_TRIVIAL_FIX_RE.search(subject) is not None or _TOOLING_FIX_RE.search(subject) is not None
+               or (scope is not None and scope.group(1).lower() in _TOOLING_SCOPES))
     if commit_type in _FIX_TYPES and not trivial:
         return CommitFinding("incident", "EXTRACTED")
     # A typed subject (feat:, docs:, ...) says what the commit is; a body that
@@ -108,11 +173,31 @@ def _event_id(*parts: str) -> str:
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()[:24]
 
 
+def _reason(body: str) -> str | None:
+    """The sentence of a commit body that gives the reason: a `Why:` line, or "...because...".
+
+    `body` is the message without its subject: when only the subject carries the reason
+    ("Switch to WAL mode so that readers never block"), the subject already says it.
+    """
+    prose = _prose(body)
+    for line in prose.splitlines():
+        header = _RATIONALE_HEADER_RE.match(line)
+        if header:
+            return line[header.end():].strip() or None
+    return next((sentence for sentence in _sentences(prose) if _RATIONALE_RE.search(sentence)), None)
+
+
 def _commit_event(commit: Commit, finding: CommitFinding) -> Event:
     _, _, body = commit.message.partition("\n")
+    summary = commit.subject
+    if finding.kind == "decision":
+        # What was decided (the subject) and why (the reason sentence): either alone says half.
+        reason = _reason(body)
+        if reason and reason not in summary:
+            summary = f"{summary} — {reason}"
     return Event(
         kind=finding.kind,
-        summary=_redact(commit.subject)[:SUMMARY_LIMIT],
+        summary=_redact(summary)[:SUMMARY_LIMIT],
         body=_redact(body.strip())[:BODY_LIMIT],
         source_id=f"commit:{commit.sha}",
         commit_sha=commit.sha,
@@ -152,7 +237,9 @@ _CONSTRAINT_RE = re.compile(
     r"\b(?:don'?t|do not|never)\s+(?:ever\s+)?(?!mind\b)"
     r"(?:touch|modify|change|edit|remove|delete|rename|refactor|move|bump|upgrade|downgrade|disable|bypass|"
     r"hard-?code|commit|push|block|call)\b"
-    r"|\b(?:must|has to|have to)\s+(?:always\s+)?(?:use|be|stay|remain|keep|go|run|pass|return|match|call)\b"
+    # ...but "we don't have to keep them in sync" releases an obligation; it isn't a rule.
+    r"|\b(?<!n't )(?<!not )(?:must|has to|have to)\s+(?:always\s+)?"
+    r"(?:use|be|stay|remain|keep|go|run|pass|return|match|call)\b"
     r"|\balways\s+(?:use|run|call|keep|go through|pass|return|check)\b"
     r"|\bremember to\b|\bfrom now on\b|\bgoing forward\b|\bmake sure (?:you )?(?:always|never)\b",
     re.I,
@@ -299,9 +386,14 @@ def find_decision(text: str) -> str | None:
 def find_constraint(text: str) -> str | None:
     """The first sentence of `text` that states a standing rule, if any."""
     for sentence in _sentences(text):
-        if not sentence.endswith("?") and _CONSTRAINT_RE.search(sentence):
+        if sentence.endswith("?") or _QUOTED_ERROR_RE.search(sentence):
+            continue  # a question, or an error message quoted ("TypeError: x must be string")
+        if _CONSTRAINT_RE.search(sentence):
             return sentence[:SUMMARY_LIMIT]
     return None
+
+
+_QUOTED_ERROR_RE = re.compile(r"\b[A-Z]\w*(?:Error|Exception|Warning):\s")
 
 
 def _first_sentences(text: str, start: int = 0, count: int = 2) -> str:
@@ -381,14 +473,35 @@ def _git_lines(repo: Path, *args: str) -> list[str]:
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
-def _changed_ranges(repo: Path, parent: str, sha: str) -> dict[str, list[tuple[int, int]]]:
-    """Line ranges each file's new version changed in `parent..sha` ({path: [(first, last)]})."""
+_INDEXED_PATHS = tuple(f"*{suffix}" for suffix in LANGUAGES)  # only files that can hold symbols
+
+
+def changed_ranges(repo: Path, shas: Iterable[str]) -> dict[str, dict[str, list[tuple[int, int]]]]:
+    """For each commit, the line ranges each indexed file's new version changed against its parent.
+
+    {sha: {path: [(first, last)]}}. One `git diff-tree --stdin` process serves every
+    commit: starting a `git diff` per commit cost about 55 ms each, most of mining.
+    Commits that changed no indexed file are left out.
+    """
+    shas = list(dict.fromkeys(shas))
+    if not shas:
+        return {}
+    result = subprocess.run(
+        git._git(repo, "diff-tree", "--stdin", "-p", "-U0", "-M", "--no-color", "--no-ext-diff",
+                 "--format=%x01%H", "--", *_INDEXED_PATHS),
+        input="".join(f"{sha}\n" for sha in shas).encode(), capture_output=True)
+    if result.returncode != 0:
+        raise git.GitError(result.stderr.decode("utf-8", errors="replace").strip() or "git diff-tree failed")
+    found: dict[str, dict[str, list[tuple[int, int]]]] = {}
     ranges: dict[str, list[tuple[int, int]]] = defaultdict(list)
     path: str | None = None
     in_header = False
-    for raw in git.stream(repo, "diff", "-U0", "-M", "--no-color", "--no-ext-diff", parent, sha, "--", sep=b"\n"):
+    for raw in result.stdout.split(b"\n"):
         line = raw.decode("utf-8", errors="replace").rstrip("\r")
-        if line.startswith("diff --git "):
+        if line.startswith("\x01"):
+            ranges = found.setdefault(line[1:].strip(), defaultdict(list))
+            in_header, path = False, None
+        elif line.startswith("diff --git "):
             in_header, path = True, None
         elif in_header and line.startswith("+++ "):
             target = unquote_path(line[4:])
@@ -398,7 +511,7 @@ def _changed_ranges(repo: Path, parent: str, sha: str) -> dict[str, list[tuple[i
             start, count = int(match.group(1)), int(match.group(2) or 1)
             # A pure deletion (count 0) sits between line `start` and the next one.
             ranges[path].append((start, start + count - 1) if count else (start, start + 1))
-    return ranges
+    return found
 
 
 class _Linker:
@@ -418,6 +531,7 @@ class _Linker:
         self._head: dict[str, tuple[str, list] | None] = {}
         self._repo_parts = self._parts(repo)
         self._first_parent: set[str] | None = None
+        self._side_ranges: dict[str, dict[str, list[tuple[int, int]]]] = {}
 
     @staticmethod
     def _parts(path: Path) -> list[str]:
@@ -464,6 +578,13 @@ class _Linker:
         overlapping = [s for s in parsed if s.start_line <= last and s.end_line >= first]
         return {sid for s in _innermost(overlapping) for sid in self.by_file.get(path, {}).get(s.local_name, [])}
 
+    def prepare_side_commits(self, commits: Iterable[Commit]) -> None:
+        """Diff every merged-branch commit that will need links, in one git process."""
+        wanted = [c.sha for c in commits if len(c.parents) == 1 and c.sha not in self.first_parent
+                  and c.sha not in self._side_ranges]
+        self._side_ranges.update(changed_ranges(self.repo, wanted))
+        self._side_ranges.update({sha: {} for sha in wanted if sha not in self._side_ranges})
+
     @property
     def first_parent(self) -> set[str]:
         if self._first_parent is None:
@@ -480,8 +601,10 @@ class _Linker:
         """
         if len(commit.parents) != 1:
             return set()
+        if commit.sha not in self._side_ranges:
+            self._side_ranges.update(changed_ranges(self.repo, [commit.sha]))
         found: set[str] = set()
-        for path, spans in _changed_ranges(self.repo, commit.parents[0], commit.sha).items():
+        for path, spans in self._side_ranges.get(commit.sha, {}).items():
             source = self.blobs.read(commit.sha, path) if language_for(path) else None
             if source is None:
                 continue
@@ -554,8 +677,13 @@ def _focus(located: set[str], named: set[str]) -> set[str]:
     return named if len(named) <= MAX_LINKS else set()
 
 
-def ingest_commit_events(conn: sqlite3.Connection, linker: _Linker, result: EventIngestResult) -> None:
-    for commit in store.commits_between(conn, newest_first=False):
+def ingest_commit_events(conn: sqlite3.Connection, linker: _Linker, result: EventIngestResult,
+                         progress: git.Progress | None = None) -> None:
+    total = store.count_commits(conn) if progress else 0
+    pending: list[tuple[Commit, list[tuple[Event, str]]]] = []
+    for done, commit in enumerate(store.commits_between(conn, newest_first=False), start=1):
+        if progress:
+            progress(done, total)
         found: list[tuple[Event, str]] = []
         finding = classify_commit(commit.message)
         if finding is not None:
@@ -567,8 +695,11 @@ def ingest_commit_events(conn: sqlite3.Connection, linker: _Linker, result: Even
                                  summary=_redact(rule), id=_event_id("commit", commit.sha, "constraint"))
             found.append((constraint, "about"))
         found = [(event, relation) for event, relation in found if store.get_event(conn, event.id) is None]
-        if not found:
-            continue
+        if found:
+            pending.append((commit, found))
+    # Classify first, then diff all the merged-branch commits that need links at once.
+    linker.prepare_side_commits(c for c, _ in pending if not store.symbols_changed_in(conn, c.sha))
+    for commit, found in pending:
         changed = set(store.symbols_changed_in(conn, commit.sha))
         if not changed and commit.sha not in linker.first_parent:
             changed = linker.symbols_for_side_commit(commit)  # a commit on a merged branch
@@ -681,13 +812,13 @@ def _sessions(root: Path, projects_dir: Path | None, codex_dir: Path | None,
 
 def ingest_events(conn: sqlite3.Connection, repo: Path | str = ".", *,
                   projects_dir: Path | None = None, codex_dir: Path | None = None, gemini_dir: Path | None = None,
-                  transcripts: bool = True) -> EventIngestResult:
+                  transcripts: bool = True, progress: git.Progress | None = None) -> EventIngestResult:
     """Mine commits already in the index, then agent session logs for this repository."""
     result = EventIngestResult()
     root = git.repo_root(repo)
     with git.BlobReader(root) as blobs:
         linker = _Linker(conn, root, blobs)
-        ingest_commit_events(conn, linker, result)
+        ingest_commit_events(conn, linker, result, progress)
         if transcripts:
             for session in _sessions(root, projects_dir, codex_dir, gemini_dir):
                 result.sessions += _ingest_session(conn, session, linker, result)

@@ -45,6 +45,10 @@ MINIFIED_MEAN_LINE = 300
 SIMILARITY = 0.9  # token similarity for "renamed and edited"; at least this, or it's a new symbol
 MIN_FUZZY_TOKENS = 25  # tiny definitions look alike; never fuzzy-match them
 INDEXED_THROUGH = "symbols.indexed_through"  # meta key: last commit whose symbols are indexed
+EXTRACTOR_KEY = "symbols.extractor"  # meta key: which extractor built the index
+# Bump when extraction finds different symbols, so existing indexes are rebuilt.
+# 0.4: JS/TS assignments (`res.status = function`), exported object methods, TS types and namespaces.
+EXTRACTOR_VERSION = "0.4"
 
 
 class SymbolError(RuntimeError):
@@ -130,13 +134,25 @@ def _parser(language: str):
 
 
 _PY_DEFINITIONS = {"function_definition": "function", "class_definition": "class"}
+# Python nodes a def or class can be (or sit inside): definitions, blocks and compound statements.
+_PY_HOLDS_DEFINITIONS = frozenset({
+    *_PY_DEFINITIONS, "decorated_definition", "block", "if_statement", "elif_clause", "else_clause",
+    "for_statement", "while_statement", "try_statement", "except_clause", "except_group_clause",
+    "finally_clause", "with_statement", "match_statement", "case_clause",
+})
 _JS_DEFINITIONS = {
     "function_declaration": "function",
     "generator_function_declaration": "function",
     "class_declaration": "class",
     "abstract_class_declaration": "class",
     "method_definition": "method",
+    # TypeScript types: no body to run, but a shape others depend on.
+    "interface_declaration": "class",
+    "type_alias_declaration": "class",
+    "enum_declaration": "class",
 }
+_TS_NAMESPACES = {"internal_module", "module"}  # `namespace NS {}`, `module NS {}`, `declare module "pkg" {}`
+_EXPORT_ROOTS = (("module", "exports"), ("exports",))
 # `const f = () => {}`, `handler = function () {}` and class fields bound to functions.
 _JS_BINDINGS = {"variable_declarator", "public_field_definition", "field_definition"}
 _JS_FUNCTION_VALUES = {"arrow_function", "function_expression", "function", "generator_function"}
@@ -167,6 +183,55 @@ def _type_name(node, source: bytes) -> str:
     return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
 
 
+def _text(node, source: bytes) -> str:
+    return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+
+
+def _member_path(node, source: bytes) -> list[str] | None:
+    """`a.b.c` as ["a", "b", "c"]; None for `this.x`, `a[b]`, `f().x` and anything else."""
+    if node is None:
+        return None
+    if node.type == "identifier":
+        return [_text(node, source)]
+    if node.type == "member_expression":
+        prop = node.child_by_field_name("property")
+        base = _member_path(node.child_by_field_name("object"), source)
+        if base is None or prop is None or prop.type != "property_identifier":
+            return None
+        return [*base, _text(prop, source)]
+    return None
+
+
+def _without_export_root(path: list[str]) -> list[str]:
+    """`module.exports.x` and `exports.x` are the module's own `x`."""
+    for root in _EXPORT_ROOTS:
+        if tuple(path[:len(root)]) == root:
+            return path[len(root):]
+    return path
+
+
+def _assigned(node, source: bytes):
+    """(name node, owner or None) that `a.b.c = function () {}` defines, or None.
+
+    The owner is the dotted path before the name, with export roots and
+    `.prototype` dropped: `res.status = ...` is `res.status`, `View.prototype.render
+    = ...` is `View.render`, `exports.compile = ...` is the module's `compile`, and
+    `module.exports = function name () {}` takes the function's own name.
+    """
+    left, right = node.child_by_field_name("left"), node.child_by_field_name("right")
+    path = _member_path(left, source)
+    if path is None or right is None:
+        return None
+    if path[-1] == "prototype":
+        return None  # `X.prototype = {...}`: not one function
+    path = [part for part in _without_export_root(path) if part != "prototype"]
+    if not path:
+        name = right.child_by_field_name("name")  # `module.exports = function createApplication () {}`
+        return (name, None) if name is not None else None
+    name = left.child_by_field_name("property") if left.type == "member_expression" else left
+    return name, ".".join(path[:-1]) or None
+
+
 def _definition(node, in_class: bool, language: str, source: bytes):
     """(name node, kind, owner type or None) if `node` defines a named function or class, else None."""
     if language == "python":
@@ -194,6 +259,22 @@ def _definition(node, in_class: bool, language: str, source: bytes):
             return None  # bodiless interface methods have no code to track
         return name, kind, None
 
+    if node.type == "assignment_expression":
+        right = node.child_by_field_name("right")
+        if right is None or right.type not in _JS_FUNCTION_VALUES | _JS_CLASS_VALUES:
+            return None
+        assigned = _assigned(node, source)
+        if assigned is None:
+            return None
+        name, owner = assigned
+        kind = "class" if right.type in _JS_CLASS_VALUES else "method" if owner else "function"
+        return name, kind, owner
+    if node.type == "pair" and in_class:  # `{ format: function (v) {} }` in an exported object
+        key, value = node.child_by_field_name("key"), node.child_by_field_name("value")
+        if key is not None and key.type == "property_identifier" and value is not None \
+                and value.type in _JS_FUNCTION_VALUES:
+            return key, "method", None
+        return None
     if node.type in _JS_DEFINITIONS:
         if node.type == "method_definition" and not in_class:
             return None  # object-literal methods aren't addressable symbols
@@ -211,8 +292,29 @@ def _definition(node, in_class: bool, language: str, source: bytes):
     return None
 
 
-def _scope_only(node, language: str, source: bytes) -> tuple[str, bool] | None:
-    """(scope name, holds methods) for Rust's `impl` and `mod`: they name a scope but aren't symbols."""
+def _scope_only(node, language: str, source: bytes) -> tuple[str | None, bool] | None:
+    """(scope name or None, holds methods) for nodes that name a scope but aren't symbols.
+
+    Rust's `impl` and `mod`, TypeScript namespaces, and objects assigned to an
+    exported name (`exports.utils = { parse () {} }`: its methods are `utils.parse`;
+    `module.exports = { start () {} }` adds no scope at all).
+    """
+    if language in ("javascript", "typescript", "tsx"):
+        if node.type in _TS_NAMESPACES and node.child_by_field_name("body") is not None:
+            name = node.child_by_field_name("name")
+            if name is None or name.type == "string":
+                return None, False  # `declare module "pkg"`: a package, not a scope of this file
+            return _text(name, source), False
+        if node.type == "assignment_expression":
+            right = node.child_by_field_name("right")
+            path = _member_path(node.child_by_field_name("left"), source)
+            if right is None or right.type != "object" or path is None:
+                return None
+            exported = _without_export_root(path)
+            if exported == path:
+                return None  # only objects assigned to an exported name hold addressable methods
+            return ".".join(exported) or None, True
+        return None
     if language != "rust" or node.child_by_field_name("body") is None:
         return None
     if node.type == "impl_item":
@@ -256,15 +358,23 @@ def extract_symbols(path: str, source: bytes) -> list[ParsedSymbol]:
 
     def visit(node, scope: tuple[str, ...], in_class: bool) -> None:
         for child in node.named_children:
+            # Most named nodes can't define anything, and checking each one in Python was
+            # half of ingest (flask: 7.9M checks). A definition always has a name child, so
+            # it is never a leaf; and a Python def or class only ever sits in a statement,
+            # never inside an expression. JS, TS and Java can define functions and classes
+            # inside expressions (callbacks, IIFEs, anonymous classes), so they keep the walk.
+            if child.named_child_count == 0 or (python and child.type not in _PY_HOLDS_DEFINITIONS):
+                continue
             named_scope = _scope_only(child, language, source)
             if named_scope is not None:
-                visit(child, (*scope, named_scope[0]), named_scope[1])
+                visit(child, (*scope, named_scope[0]) if named_scope[0] else scope, named_scope[1])
                 continue
             definition = _definition(child, in_class, language, source)
             if definition is None:
                 # Descend through exports, decorators, blocks and conditionals,
                 # keeping class context (a class body's `if` still holds methods).
-                visit(child, scope, in_class and child.type not in ("function_definition",))
+                # A nested object (`{ nested: { inner () {} } }`) is not the exported one.
+                visit(child, scope, in_class and child.type not in ("function_definition", "pair"))
                 continue
             name_node, kind, owner = definition
             own_scope = (*scope, owner) if owner else scope
@@ -322,6 +432,7 @@ class SymbolIngestResult:
     renamed: int = 0
     deleted: int = 0
     rebuilt: bool = False
+    upgraded: bool = False  # rebuilt because this whyfence extracts more than the one that built the index
 
 
 _C_ESCAPES = {'"': '"', "\\": "\\", "a": "\a", "b": "\b", "t": "\t", "n": "\n", "v": "\v", "f": "\f", "r": "\r"}
@@ -481,10 +592,13 @@ class _Walker:
         if len(symbol.tokens) < MIN_FUZZY_TOKENS:
             return None
         best, best_score = None, SIMILARITY
+        # SequenceMatcher indexes its second sequence; index the new symbol once and swap
+        # candidates in as the first, instead of re-indexing it for every candidate.
+        matcher = SequenceMatcher(None, (), symbol.tokens, autojunk=False)
         for old in candidates:
             if old.tokens is None or _family(old.kind) != _family(symbol.kind) or len(old.tokens) < MIN_FUZZY_TOKENS:
                 continue
-            matcher = SequenceMatcher(None, old.tokens, symbol.tokens, autojunk=False)
+            matcher.set_seq1(old.tokens)
             if matcher.real_quick_ratio() < best_score or matcher.quick_ratio() < best_score:
                 continue
             score = matcher.ratio()
@@ -522,7 +636,8 @@ class _Walker:
             _Live(old.symbol_id, path, symbol.local_name, symbol.kind, symbol.fingerprint, symbol.tokens))
 
 
-def ingest_symbols(conn: sqlite3.Connection, repo: Path | str = ".") -> SymbolIngestResult:
+def ingest_symbols(conn: sqlite3.Connection, repo: Path | str = ".", *,
+                   progress: git.Progress | None = None) -> SymbolIngestResult:
     """Bring symbol history up to HEAD. Resumes from the last indexed commit; safe to re-run."""
     result = SymbolIngestResult()
     root = git.repo_root(repo)
@@ -530,13 +645,23 @@ def ingest_symbols(conn: sqlite3.Connection, repo: Path | str = ".") -> SymbolIn
         return result
 
     since = store.get_meta(conn, INDEXED_THROUGH)
-    if since and not git.is_ancestor(root, since):
+    if since and store.get_meta(conn, EXTRACTOR_KEY) != EXTRACTOR_VERSION:
+        # This whyfence finds definitions an older one didn't (`res.status = function`), and
+        # ingest only walks new commits: rebuild, and re-mine commit events so they link to
+        # the new symbols. Session events stay (their transcripts may be gone by now).
+        store.clear_symbol_versions(conn)
+        store.forget_commit_events(conn)
+        since = None
+        result.rebuilt = result.upgraded = True
+    elif since and not git.is_ancestor(root, since):
         # History was rewritten (rebase, reset, branch switch): rebuild from scratch.
         # Symbol ids are deterministic, so links from events survive the rebuild.
         store.clear_symbol_versions(conn)
         since = None
         result.rebuilt = True
+    store.set_meta(conn, EXTRACTOR_KEY, EXTRACTOR_VERSION)
     live = _restore(conn) if since else defaultdict(list)
+    total = git.count_commits(root, f"{since}..HEAD" if since else "HEAD", first_parent=True) if progress else 0
 
     with git.BlobReader(root) as blobs:
         walker = _Walker(conn, blobs, live, result)
@@ -545,4 +670,6 @@ def ingest_symbols(conn: sqlite3.Connection, repo: Path | str = ".") -> SymbolIn
                 walker.apply(sha, changes)
                 store.set_meta(conn, INDEXED_THROUGH, sha)
             result.commits += 1
+            if progress:
+                progress(result.commits, total)
     return result

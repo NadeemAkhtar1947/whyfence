@@ -5,7 +5,7 @@
 | Tool | Returns |
 |---|---|
 | `rules()` | Standing rules recorded for the repository by trusted authors, newest first. Agents are told to load these at session start |
-| `why(symbol_name)` | Decisions, dead ends, corrections, constraints, reverts and incidents recorded against a function or class, newest first |
+| `why(symbol_name)` | Decisions, dead ends, corrections, constraints, reverts and incidents recorded against a function or class: up to `limit` (default 10), strongest first (rules, dead ends, corrections, reverts, then the rest, newest first), with a count of any left out |
 | `history(symbol_name)` | Each recorded version of the symbol, with the commit that introduced it (`valid_from`) and the commit that replaced it (`valid_to`) |
 | `search(text)` | Everything recorded that mentions the words, best match first, each with the functions and classes it is linked to |
 
