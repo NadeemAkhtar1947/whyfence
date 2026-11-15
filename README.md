@@ -61,8 +61,8 @@ why("app.models.TaskFile")
 | `revert` | Commit subjects like `Revert "…"` | |
 
 **How often is a mined event right?** Precision of commit-mined events, per kind, on a
-fresh blind sample of 20 per kind, labelled independently by two people (one of them the
-AI assistant that wrote the classifier). Read each row only for the repositories named
+fresh blind sample of 20 per kind, labelled by two independent AI labellers, one of which
+wrote the classifier (no human labelled it). Read each row only for the repositories named
 in it; the kinds are not in their natural proportions, so the rows don't add up to one
 number:
 

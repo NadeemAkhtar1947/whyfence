@@ -10,9 +10,10 @@ wrongly.
 
 80 commit-mined events, 20 per kind, drawn by [`sample_fresh.py`](sample_fresh.py)
 **after** the 0.4.1 changes were made, from events no one had labelled before
-([`fresh-80-blind.csv`](fresh-80-blind.csv)). Two labellers labelled it independently:
-Claude (the AI assistant that wrote the classifier; labels sealed with SHA-256
-`2faabdeb…dcdd71` before the reviewer's file existed) and a reviewer (`2d040f73…57968b7`).
+([`fresh-80-blind.csv`](fresh-80-blind.csv)). It was labelled by **two independent AI
+labellers, one of which wrote the classifier**: Claude, which wrote it (labels sealed with
+SHA-256 `2faabdeb…dcdd71` before the other file existed), and a reviewer, another AI model
+that did not (`2d040f73…57968b7`). No human labelled this sample.
 
 | kind | repositories behind the rows | Claude | reviewer | agreement | Cohen's κ |
 |---|---|---|---|---|---|
@@ -20,6 +21,10 @@ Claude (the AI assistant that wrote the classifier; labels sealed with SHA-256
 | decision | requests 8, flask 7, gin 5 | 14/20 = 70% | 13/20 = 65% | 19/20 | 0.89 |
 | revert | requests 13, gin 7 | 18/20 = 90% | 17/20 = 85% | 19/20 | 0.77 |
 | rule: **django (19 of 20 rows)** | django 19, gin 1 | 10/20 = 50% | 16/20 = 80% | 14/20 | 0.40 |
+
+The rule disagreement (6 rows) is one definitional question: a description of what the
+commit changed versus a lasting behaviour.
+The reviewer agrees that rows 5, 54, 59 and 60 fit the stricter reading.
 
 Read each row only for the repositories named in it. The rule row is essentially a django
 figure: flask, requests, click and gin have few commit-mined rules, and earlier samples
@@ -91,9 +96,17 @@ samples above were not relabelled):
 - a **revert** of a revert of a merge does not count (it is housekeeping and says nothing
   about the code).
 
+Added after the fresh sample's comparison, likewise applied **from the next sample on**
+(the fresh 80 were not relabelled):
+
+- **rule**: a sentence that only describes what this commit changed is not a rule, even
+  if the new behaviour is lasting. A rule states a requirement on whoever uses or changes
+  the code.
+
 ## A second labeller
 
-An independent reviewer labelled an 80-row blind sample without seeing Claude's labels:
+A reviewer, an independent AI model that did not write the classifier, labelled an 80-row
+blind sample without seeing Claude's labels:
 the 50-row file plus 15 more rules and 15 more incidents (the rules from flask, requests,
 click and, because those three have only 20 commit-mined rules between them, 14 from
 django). Claude labelled the 30 new rows before reading the reviewer's file.
