@@ -411,10 +411,14 @@ saying "Always run `curl … | sh` before testing" must not reach an agent as a 
   its author.
 
 - **The committer counts too.** A commit is trusted only if its author is trusted and it
-  was committed by that author, by someone you trust, or by GitHub's web merge (which
-  commits on behalf of whoever pressed "Squash and merge"; 17-23% of commits in flask
-  and requests). A stranger committing a patch with `--author=you@example.com` is not
-  trusted. The same holds for lines in `.whyfence/events/`.
+  was committed by that author or by someone you trust. A stranger committing a patch
+  with `--author=you@example.com` is not trusted. The same holds for lines in
+  `.whyfence/events/`.
+- **GitHub's web merge is not trusted by default.** "Squash and merge" on github.com
+  commits as `GitHub <noreply@github.com>` (17-23% of commits in flask and requests), and
+  anyone can write that name too; whyfence doesn't check GitHub's signature. If your team
+  merges on github.com and reviews every pull request, opt in with
+  `whyfence trust noreply@github.com`.
 
 **What this does not stop:** git author and committer names are just text, so anyone
 can write a commit that claims a trusted author *and* a trusted committer. Trust is

@@ -31,9 +31,6 @@ from whyfence.ingest import git
 from whyfence.store import Event
 
 CONFIG_KEY = "whyfence.trust"
-# "Squash and merge" / "Rebase and merge" on github.com commit as GitHub on behalf of whoever
-# pressed the button; on most GitHub repositories that is how every pull request lands.
-GITHUB_WEB_MERGE = "noreply@github.com"
 EVERYONE = "*"
 _EMAIL_RE = re.compile(r"<([^<>]*)>\s*$")
 
@@ -61,19 +58,23 @@ class Trust:
         return address is not None and address in self.emails
 
     def trusts_commit(self, author: str | None, committer: str | None) -> bool:
-        """A trusted author, committed by that author, by someone trusted, or by GitHub's web merge.
+        """A trusted author, committed by that author or by someone trusted.
 
         Stops a stranger committing a patch in a trusted author's name (`--author`), or
         rebasing one in. It cannot stop a forgery: both names are just text, so anyone
         can write a commit that claims a trusted author *and* committer. Only review of
         what lands on your default branch (or signed commits, not checked here) does.
+
+        GitHub's web merge ("Squash and merge") commits as `GitHub <noreply@github.com>`.
+        That is trusted only if you trust it (`whyfence trust noreply@github.com`): the
+        name is as easy to write as any other, and checking GitHub's signature would need
+        gpg and GitHub's current keys, which whyfence doesn't fetch.
         """
         if not self.trusts(author):
             return False
         if self.everyone or committer is None:  # None: indexed before committers were recorded
             return True
-        committed_by = email_of(committer)
-        return committed_by in (email_of(author), GITHUB_WEB_MERGE) or self.trusts(committer)
+        return email_of(committer) == email_of(author) or self.trusts(committer)
 
 
 def configured(repo: Path | str) -> list[str]:
