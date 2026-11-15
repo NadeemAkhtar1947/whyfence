@@ -109,7 +109,9 @@ def with_rules(target: Repo) -> Repo:
     target.git("config", "user.email", "ada@example.com")
     target.git("config", "user.name", "Ada")
     target.commit("Add ops\n\nNever call deploy() from a request handler.", {"app/ops.py": OPS})
-    target.commit("Document releases\n\nAlways run the release script before pushing.", {"RELEASE.md": "tag first\n"})
+    # In a code file: since 0.4.1, a commit that only touches docs yields no events.
+    target.commit("Add the release script\n\nAlways run the release script before pushing.",
+                  {"scripts/release.py": "print('tag first')\n"})
     return target
 
 

@@ -509,6 +509,10 @@ def clear_symbol_versions(conn: sqlite3.Connection) -> None:
         conn.execute("DELETE FROM symbol_versions")
 
 
+def count_commit_events(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT count(*) FROM events WHERE commit_sha IS NOT NULL").fetchone()[0]
+
+
 def forget_commit_events(conn: sqlite3.Connection) -> None:
     """Drop events mined from commit messages; the next ingest re-mines (and re-links) them from git.
 

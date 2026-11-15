@@ -1,0 +1,488 @@
+n,repo,kind,sha,commit_url,whyfence_summary,full_commit_message,my_label
+1,requests,revert,b98cc8b4e9d8,https://github.com/psf/requests/commit/b98cc8b4e9d8c4c12b8f52c9a9be151c306cb977,"Revert ""Initial stop-the-bleeding fix""","Revert ""Initial stop-the-bleeding fix""
+
+This reverts commit 730c0e2e2bef77968a86962f9d5f2bebba4d19ec.",
+2,django,constraint,1a8fd5cf75bf,https://github.com/django/django/commit/1a8fd5cf75bf855852f6bc2f75c3da9f7b145669,Given we always call get_db_prep_value it might still be an avenue worth exploring in the future to offer a publicly documented interface to allow field to take an active part in the compilation chain.,"Fixed #36727 -- Deprecated Field.get_placeholder in favor of get_placeholder_sql.
+
+The lack of ability of the get_placeholder call chain to return SQL and
+parameters separated so they can be mogrified by the backend at execution time
+forced implementations to dangerously interpolate potentially user controlled
+values.
+
+The get_placeholder_sql name was chosen due to its proximity to the previous
+method, but other options such as Field.as_sql were considered but ultimately
+rejected due to its different input signature compared to Expression.as_sql
+that might have lead to confusion.
+
+There is a lot of overlap between what Field.get_db_prep_value and
+get_placeholder_sql do but folding the latter in the former would require
+changing its return signature to return expression which is a way more invasive
+change than what is proposed here.
+
+Given we always call get_db_prep_value it might still be an avenue worth
+exploring in the future to offer a publicly documented interface to allow field
+to take an active part in the compilation chain.
+
+Thanks Jacob for the review.",
+3,gin,revert,63b5d1c4c885,https://github.com/gin-gonic/gin/commit/63b5d1c4c885a0cf257b5977e4f019e9f9458137,"Revert ""Merge pull request #753 from gin-gonic/bug""","Revert ""Merge pull request #753 from gin-gonic/bug""
+
+This reverts commit 556287ff0856a5ad1f9a1b493c188cabeceba929, reversing
+changes made to 32cab500ecc71d2975f5699c8a65c6debb29cfbe.",
+4,django,constraint,91e9f1c97284,https://github.com/django/django/commit/91e9f1c972842284a94097e252307ce6ed1007a1,This commits lifts the restriction that the outermost atomic block must be declared with savepoint=False.,"Fixed #24921 -- set_autocommit(False) + ORM queries.
+
+This commits lifts the restriction that the outermost atomic block must
+be declared with savepoint=False. This restriction was overly cautious.
+
+The logic that makes it safe not to create savepoints for inner blocks
+also applies to the outermost block when autocommit is disabled and a
+transaction is already active.
+
+This makes it possible to use the ORM after set_autocommit(False).
+Previously it didn't work because ORM write operations are protected
+with atomic(savepoint=False).",
+5,django,constraint,215647c0f761,https://github.com/django/django/commit/215647c0f7614abe4fe0cd76bc70dd7b02f829b4,Made introspection always return a unicode as column name on Oracle.,"Fixed #20386 - Introspection problem on Oracle
+
+Made introspection always return a unicode as column name on Oracle.
+Thanks aaugustin for review and suggestion to use force_text().",
+6,requests,revert,780ce3902ecc,https://github.com/psf/requests/commit/780ce3902eccc7f7087e195211daf4c592cb28fb,"Revert ""Proxy urls should have explicit schemes.""","Revert ""Proxy urls should have explicit schemes.""
+
+This reverts commit 840540b6b1f07ef87faab73392c03fbef0dcc9fe.
+
+Conflicts:
+	requests/adapters.py
+	requests/utils.py",
+7,gin,decision,4c4444b16033,https://github.com/gin-gonic/gin/commit/4c4444b16033c7b000492f57119901cba9870b5c,Write header immediately in AbortWithStatus() — Otherwise calling AbortWithStatus() will fail to write body because c.Writer.Written() is set true by WriteHeaderNow().,"Write header immediately in AbortWithStatus()
+
+Otherwise, caller needs to invoke WriteHeaderNow himself after
+AbortWithStatus(), which is error-prone.
+
+Also modified ErrorLoggerT() such that it always writes log to response
+body. Otherwise calling AbortWithStatus() will fail to write body because
+c.Writer.Written() is set true by WriteHeaderNow().",
+8,click,incident,bee33141650c,https://github.com/pallets/click/commit/bee33141650ce7c91551f5fac9ebfb0c8fca473e,fix: Skip flaky pager test on macOS with free-threaded Python 3.14t (#3470),fix: Skip flaky pager test on macOS with free-threaded Python 3.14t (#3470),
+9,requests,incident,cfa627ae62ce,https://github.com/psf/requests/commit/cfa627ae62cebff20edf0816ce327c61603ef6a8,Fixed encoding of fields with the same name.,"Fixed encoding of fields with the same name.
+
+* Properly handle repeated data fields for multipart/form-data requests (#737)
+* Allow a list of 2-tuples as the `files` agument.
+* Consistently serialize lists a of parameters (#729).",
+10,flask,incident,7c40aa9e50d9,https://github.com/pallets/flask/commit/7c40aa9e50d97b7c412745a53c8cdc2597c46680,Import app from wsgi.py or app.py if FLASK_APP is not defined,"Import app from wsgi.py or app.py if FLASK_APP is not defined
+
+Fixes #2376",
+11,flask,incident,7242abcfb22c,https://github.com/pallets/flask/commit/7242abcfb22c5b7321dc658766e8b6f5486ff1c3,Extend the logging from the dynamically set logger class.  This fixes #234,Extend the logging from the dynamically set logger class.  This fixes #234,
+12,requests,decision,20cd46426fda,https://github.com/psf/requests/commit/20cd46426fda1b048afa90955f445424efa4be46,Only return a path if the cacert.pem file exists. — This will permit the deletion of just that one file in order to fall back to the [probably more accurate but less consistent] Distro provided CA certs.,"Only return a path if the cacert.pem file exists.
+
+This will permit the deletion of just that one file in order
+to fall back to the [probably more accurate but less consistent]
+Distro provided CA certs.",
+13,requests,revert,8e69c9f0a16b,https://github.com/psf/requests/commit/8e69c9f0a16b37990df4430eb81a5138520689ac,"Revert ""fix failing test ""test_prepare_unicode_url""""","Revert ""fix failing test ""test_prepare_unicode_url""""
+
+This reverts commit 26ed7c2e1dce4271f3a3b111a167a6dcca3acddf.",
+14,requests,incident,d22eaf96e2a1,https://github.com/psf/requests/commit/d22eaf96e2a1c64bc29579a072f67d2a9c758ef8,Fixed #1630,Fixed #1630,
+15,requests,incident,1d7fd6c8b305,https://github.com/psf/requests/commit/1d7fd6c8b305351ba34280492fa3a9cf968cfbb8,Fixes error swallowing in set_environ,Fixes error swallowing in set_environ,
+16,django,constraint,fe189dc43ab3,https://github.com/django/django/commit/fe189dc43ab3eddbbceefb6834893b73ca60d5ed,The `add` param must be `True` for `auto_now_add` fields to be populated.,"Fixed #36847 -- Ensured auto_now_add fields are set on pre_save().
+
+Regression in 94680437a45a71c70ca8bd2e68b72aa1e2eff337. Refs #27222.
+
+During INSERT operations, `field.pre_save()` is called to prepare values
+for db insertion. The `add` param must be `True` for `auto_now_add`
+fields to be populated. The regression commit passed `False`, causing
+`auto_now_add` fields to remain `None` when used by other fields, such
+as `upload_to` callables.
+
+Thanks Ran Benita for the report.",
+17,click,incident,37aa0c6568eb,https://github.com/pallets/click/commit/37aa0c6568eb156749aea613dd78fe35bc5cfcef,Fix dev version in 8.4.1,Fix dev version in 8.4.1,
+18,django,constraint,02447fb133b5,https://github.com/django/django/commit/02447fb133b53ec7d0ff068cc08f06fdf8817ef7,"The current implementation works only for basic examples without supporting nested structures and doesn't follow ""the general principle that the contained object must match the containing object as to structure and data contents, possibly after discarding some non-matching array elements or object k","Fixed #31835 -- Dropped support for JSONField __contains lookup on Oracle.
+
+The current implementation works only for basic examples without
+supporting nested structures and doesn't follow ""the general principle
+that the contained object must match the containing object as to
+structure and data contents, possibly after discarding some
+non-matching array elements or object key/value pairs from the
+containing object"".",
+19,gin,incident,d17e0a31b8ff,https://github.com/gin-gonic/gin/commit/d17e0a31b8ffd2df3a85734dfca5314b9e152a80,fix: remove hard code for cache.,fix: remove hard code for cache.,
+20,flask,decision,3d67736e090f,https://github.com/pallets/flask/commit/3d67736e090f55fcdc476452ac89a79fdd14cc23,"Check error handlers for specific classes first — the idea being, that a flask extension might want to raise an exception, with the default behaviour of creating a HTTP error page, but still allowing the user to add a view/handler specific to that exception (e.g., ""Forbidden because you are not in t","Check error handlers for specific classes first
+
+This allows adding error handlers like this:
+
+    @app.errorhandler(werkzeug.exceptions.Forbidden)
+
+And subclassing HTTPExceptions:
+
+    class ForbiddenBecauseReason(Forbidden): pass
+
+    @app.errorhandler(ForbiddenBecauseReason)
+    def error1(): return ""Forbidden because reason"", 403
+    @app.errorhandler(403)
+    def error2(): return ""Forbidden"", 403
+
+... the idea being, that a flask extension might want to raise an
+exception, with the default behaviour of creating a HTTP error page,
+but still allowing the user to add a view/handler specific to that
+exception (e.g., ""Forbidden because you are not in the right group"").",
+21,django,constraint,9ffab9cee1a5,https://github.com/django/django/commit/9ffab9cee1a5bd1a2f6c326ae970d92526f9a304,"Following the app-loading refactor, these objects must live outside of django.contrib.sites.models because they must be available without importing the django.contrib.sites.models module when django.contrib.sites isn't installed.","Moved RequestSite and get_current_site.
+
+Following the app-loading refactor, these objects must live outside of
+django.contrib.sites.models because they must be available without
+importing the django.contrib.sites.models module when
+django.contrib.sites isn't installed.
+
+Refs #21680. Thanks Carl and Loic for reporting this issue.",
+22,requests,decision,c5fddb95edd7,https://github.com/psf/requests/commit/c5fddb95edd7694c0164ae2a5279ceeebe475511,Only return a path if the cacert.pem file exists. — This will permit the deletion of just that one file in order to fall back to the [probably more accurate but less consistent] Distro provided CA certs.,"Only return a path if the cacert.pem file exists.
+
+This will permit the deletion of just that one file in order
+to fall back to the [probably more accurate but less consistent]
+Distro provided CA certs.",
+23,requests,decision,a5f4f3c9a3da,https://github.com/psf/requests/commit/a5f4f3c9a3da6064feaf009ed94aba14c77fb137,"resolve more-itertools py2.7 issues — In order to keep the test suite going, we're pinning under 6.0.0 (the breaking version) until we have better syntax in pipfile.","resolve more-itertools py2.7 issues
+
+more-itertools is a transitive testing dependency that no longer supports
+python2.7. In order to keep the test suite going, we're pinning under
+6.0.0 (the breaking version) until we have better syntax in pipfile.",
+24,gin,incident,fadb06968fec,https://github.com/gin-gonic/gin/commit/fadb06968fec7462f4c2ecfa74e6a1b2509470d8,Fix go version,Fix go version,
+25,flask,decision,b5069d07a24a,https://github.com/pallets/flask/commit/b5069d07a24a3c3a54fb056aa6f4076a0e7088c7,adding `_scheme` parameter to `url_for` — In order to better facilitate generation of URLs that make use of an HTTPS URL scheme this patch adds a parameter with this specific purpose in mind.,"adding `_scheme` parameter to `url_for`
+
+In order to better facilitate generation of URLs that make use of an HTTPS URL
+scheme this patch adds a parameter with this specific purpose in mind. To
+achieve this we explicitly pass in a param, `_scheme='https'`, and then set the
+`url_scheme` attribute of our `MapAdapter` instance appropriately.
+
+Importantly, `_external=True` must be set in order for this to work properly.
+As such, failure to do so results in a `ValueError` being raised.",
+26,gin,decision,2b8ed80da0b4,https://github.com/gin-gonic/gin/commit/2b8ed80da0b442818a2e3a06e331e149be484bfa,"RedirectTrailingSlash has no effect unless RedirectFixedPath is set — RedirectTrailingSlash setting is meant to cause a redirect, but the code is never called because the setting wasn't being checked.","RedirectTrailingSlash has no effect unless RedirectFixedPath is set
+
+Which is not likely the desired behavior.
+
+RedirectTrailingSlash setting is meant to cause a redirect, but the code is never called because the setting wasn't being checked. Instead RedirectFixedPath was being checked.",
+27,gin,revert,041ca04a4768,https://github.com/gin-gonic/gin/commit/041ca04a4768ededad44dcc2748f3d47e4b59bde,"Revert ""Merge pull request #744 from aviddiviner/logger-fix""","Revert ""Merge pull request #744 from aviddiviner/logger-fix""
+
+This reverts commit c3bfd69303d0fdaf2d43a7ff07cc8ee45ec7bb3f, reversing
+changes made to 9177f01c2843b91820780197f521ba48554b9df3.",
+28,requests,decision,686db5d45253,https://github.com/psf/requests/commit/686db5d45253a721b60fb1e445aa4dff0fcf2e87,"Defined keys(), values(), and items() in order to support dict-like client interface. Now, we throw exceptions if __getitem__() or __setitem__() is used when multiple domains are in jar.","Defined keys(), values(), and items() in order to support dict-like client interface. Now, we throw exceptions if __getitem__() or __setitem__() is used when multiple domains are in jar.",
+29,requests,revert,488a51d619c7,https://github.com/psf/requests/commit/488a51d619c7175248fba1f904a834224c009966,"Revert ""Auto-detect CA Cert path instead of requiring users to hack setup.py""","Revert ""Auto-detect CA Cert path instead of requiring users to hack setup.py""
+
+This reverts commit 62a23bfbdecf54e13e571237df5a175e53d539cb.",
+30,gin,incident,7e64d32269d8,https://github.com/gin-gonic/gin/commit/7e64d32269d817b645d5d4694100a8a8ad6960cb,Attempt to fix #1462 (#1463),"Attempt to fix #1462 (#1463)
+
+#1462",
+31,flask,decision,dbe0df756bf5,https://github.com/pallets/flask/commit/dbe0df756bf587b242f2406bef9e7e8ef26f0813,Use setdefault() because it sets session.modified correctly.,Use setdefault() because it sets session.modified correctly.,
+32,requests,decision,d505b94fa47d,https://github.com/psf/requests/commit/d505b94fa47dbce4eae4db09d0056b7808b71b01,"Add DeprecationWarnings to inform users of plans — After a long discussion in IRC and on several issues, the developers of requests have decided to remove specific functions from requests.utils in version 3.0.0.","Add DeprecationWarnings to inform users of plans
+
+After a long discussion in IRC and on several issues, the developers of
+requests have decided to remove specific functions from requests.utils
+in version 3.0.0. To give users ample time to prepare for this, we've
+added DeprecationWarnings long in advance. See also the planning of this
+in issue #2266.",
+33,django,constraint,8c72aa237918,https://github.com/django/django/commit/8c72aa237918e31a525022f72b22cac75451af86,"When order_by causes new joins to be added to the query, the joins must be LEFT OUTER joins for nullable relations, otherwise the order_by could cause the results to be altered.","Fixed qs.order_by() join promotion for already existing joins
+
+When order_by causes new joins to be added to the query, the joins must
+be LEFT OUTER joins for nullable relations, otherwise the order_by
+could cause the results to be altered. This commit fixes the logic to
+only promote new joins, previously all joins in the order_by lookup
+path were promoted.
+
+Thanks to Bruno Desthuilliers for spotting this corner case.",
+34,requests,revert,53d60cac4f8d,https://github.com/psf/requests/commit/53d60cac4f8d53181843bc55847b8a4dd427a239,"Revert ""Update Makefile and travis configuration to run all (non-external) tests""","Revert ""Update Makefile and travis configuration to run all (non-external) tests""
+
+This reverts commit a453a78c7c94aa220aa099dd62a36ec5b5232571.",
+35,gin,decision,d27685e714cb,https://github.com/gin-gonic/gin/commit/d27685e714cb0b9375e0c9d3ca3df5a6a4945a6c,chore: attempt to fix some gomod issue (#1751) — because some dependencies only are used on example i.e. grpc.,"chore: attempt to fix some gomod issue (#1751)
+
+#1604 #1566 #1700 #1737 
+
+because some dependencies only are used on example i.e. grpc.
+
+Or migrate `examples` to gin-gonic/examples`?",
+36,requests,revert,91766548d10c,https://github.com/psf/requests/commit/91766548d10cd5ebf46aba376f9e000263285875,"Revert ""Make safe_mode play nice with timeout (fixes #312)""","Revert ""Make safe_mode play nice with timeout (fixes #312)""
+
+This reverts commit 805c4db55413c96c5d6e0f95560119c000f660c9.",
+37,django,constraint,dc890bef5ad8,https://github.com/django/django/commit/dc890bef5ad8e9fccce55f3e64af72103ea6e8c1,Text with more than 4000 characters must be set to as a CLOB on Oracle what caused a mixed datatype error (ORA-01790) when shorter text appeared in the same operation.,"Fixed #30510 -- Fixed crash of QuerySet.bulk_create() with mixed-length texts on Oracle.
+
+Text with more than 4000 characters must be set to as a CLOB on Oracle
+what caused a mixed datatype error (ORA-01790) when shorter text
+appeared in the same operation.",
+38,django,constraint,8914b571eb5f,https://github.com/django/django/commit/8914b571eb5f93722b9741b1da9eb69347271b11,"That is, quoted strings are able to express horizontal tabs, space characters, and everything in the range from 0x21 to 0x7e, expect for 0x22 (`""`) and 0x5C (`\`), which can still be expressed but must be escaped with their own `\`.","Fixed #36023 -- Handled controls chars in content_disposition_header.
+
+To use the simple `filename=""...""` form, the value must conform to the
+official grammar from RFC6266[^1]:
+
+    filename-parm       = ""filename"" ""="" value
+    value               = <value, defined in [RFC2616], Section 3.6>
+                        ; token | quoted-string
+
+The `quoted-string` definition comes from RFC 9110[^2]:
+
+```
+    quoted-string  = DQUOTE *( qdtext / quoted-pair ) DQUOTE
+    qdtext         = HTAB / SP / %x21 / %x23-5B / %x5D-7E / obs-text
+
+The backslash octet (""\"") can be used as a single-octet quoting
+mechanism within quoted-string and comment constructs. Recipients that
+process the value of a quoted-string MUST handle a quoted-pair as if
+it were replaced by the octet following the backslash.
+
+    quoted-pair    = ""\"" ( HTAB / SP / VCHAR / obs-text )
+
+A sender SHOULD NOT generate a quoted-pair in a quoted-string except
+where necessary to quote DQUOTE and backslash octets occurring within
+that string.
+```
+
+That is, quoted strings are able to express horizontal tabs, space
+characters, and everything in the range from 0x21 to 0x7e, expect for
+0x22 (`""`) and 0x5C (`\`), which can still be expressed but must be
+escaped with their own `\`.
+
+We ignore the case of `obs-text`, which is defined as the range
+0x80-0xFF, since its presence is there for permissive parsing of
+accidental high-bit characters, and it should not be generated by
+conforming implementations.
+
+Transform this character range into a regex and apply it in addition
+to the ""is ASCII"" check.  This ensures that all simple filenames are
+expressed in the simple format, and that all filenames with newlines
+and other control characters are properly expressed with the
+percent-encoded `filename*=...`form.
+
+[^1]: https://datatracker.ietf.org/doc/html/rfc6266#section-4.1
+[^2]: https://datatracker.ietf.org/doc/html/rfc9110#name-quoted-strings",
+39,gin,constraint,3576efa535d1,https://github.com/gin-gonic/gin/commit/3576efa535d1640b6611c53119c250012975ba42,Default writers must be io.Writers,"Merge pull request #590 from seregayoga/develop
+
+Default writers must be io.Writers",
+40,flask,incident,3fd7abec3c8c,https://github.com/pallets/flask/commit/3fd7abec3c8c4a32da9579d0824b10d5ba0add83,fix project urls,fix project urls,
+41,requests,revert,b2ce5be9d049,https://github.com/psf/requests/commit/b2ce5be9d049a73e0adb475156435b854355f234,"Revert ""Minor Patch TypeError thrown""","Revert ""Minor Patch TypeError thrown""",
+42,django,constraint,1251772cb83a,https://github.com/django/django/commit/1251772cb83aa4106f526fe00738e51c0eb59122,"This resolves an issue on databases without a native JSONField (MariaDB, MySQL, SQLite, Oracle), where values must be wrapped.","Fixed #31936 -- Fixed __in lookup on key transforms for JSONField.
+
+This resolves an issue on databases without a native JSONField
+(MariaDB, MySQL, SQLite, Oracle), where values must be wrapped.
+
+Thanks Sébastien Pattyn for the report.",
+43,flask,incident,661ee54bc2bc,https://github.com/pallets/flask/commit/661ee54bc2bc1ea0763ac9c226f8e14bb0beb5b1,Raise exceptions if a function is overridden by a new endpoint.  This fixes #570,Raise exceptions if a function is overridden by a new endpoint.  This fixes #570,
+44,django,constraint,4bff19463361,https://github.com/django/django/commit/4bff19463361927ff752929da1bc04e9aa1c2e72,"This is a BACKWARDS INCOMPATIBLE change, because it removes the flawed 'auto_adapt_to_methods' decorator, and replaces it with 'method_decorator' which must be applied manually when necessary, as described in the 1.2 release notes.","Fixed #12804 - regression with decorating admin views.
+
+This is a BACKWARDS INCOMPATIBLE change, because it removes the flawed
+'auto_adapt_to_methods' decorator, and replaces it with 'method_decorator'
+which must be applied manually when necessary, as described in the 1.2
+release notes.
+
+For users of 1.1 and 1.0, this affects the decorators:
+
+ * login_required
+ * permission_required
+ * user_passes_test
+
+For those following trunk, this also affects:
+
+ * csrf_protect
+ * anything created with decorator_from_middleware 
+
+If a decorator does not depend on the signature of the function it is
+supposed to decorate (for example if it only does post-processing of the
+result), it will not be affected.
+ 
+
+
+
+git-svn-id: http://code.djangoproject.com/svn/django/trunk@12399 bcc190cf-cafb-0310-a4f2-bffc1f526a37",
+45,gin,incident,ebe5e2a6bfdc,https://github.com/gin-gonic/gin/commit/ebe5e2a6bfdca50fd44074b470ad486392e2933f,fix(golangci.yml): move fiximports to goimports section and replace exportloopref with copyloopvar (#4167),"fix(golangci.yml): move fiximports to goimports section and replace exportloopref with copyloopvar (#4167)
+
+Co-authored-by: huangzw <huangzw@2345.com>",
+46,gin,revert,29a145c85dc0,https://github.com/gin-gonic/gin/commit/29a145c85dc0fafc3dd0ada62d856c4d95240010,"Revert ""context: inherits context cancelation and deadline from http.Request context for Go>=1.7 (#1690)"" (#1736)","Revert ""context: inherits context cancelation and deadline from http.Request context for Go>=1.7 (#1690)"" (#1736)
+
+This reverts commit f67d7a90c4d2e5bdf310a78d7e6a04e3d9aee851.",
+47,requests,incident,32cc197a8150,https://github.com/psf/requests/commit/32cc197a81502c30715c9e164006dce6debcd1bf,fixes,fixes,
+48,click,incident,8c5f779185ca,https://github.com/pallets/click/commit/8c5f779185ca714b457e6a469819ad77775a8947,Fix error in new AppEngine environments,"Fix error in new AppEngine environments
+
+Newer AppEngine environments don't define the SERVER_SOFTWARE env variable. Without this change, importing click dies with a KeyError.
+
+See related pull request for urllib3: https://github.com/urllib3/urllib3/pull/1704",
+49,requests,decision,b77c1a3debbc,https://github.com/psf/requests/commit/b77c1a3debbca5f7317773a2a7a75540ad4c45cf,Correct urllib3 compatibility comment — So that it's in line with the code.,"Correct urllib3 compatibility comment
+
+So that it's in line with the code. I saw the warning raised recently and had to dive into the code for exact compatibility, but I stopped after reading the comment rather than the code. 
+Maybe a better solution would be to surface the supported versions in the warning, but I see it was changed recently in https://github.com/requests/requests/pull/4144/",
+50,gin,revert,3b8150c83c53,https://github.com/gin-gonic/gin/commit/3b8150c83c5304be4dd6b49f212cda6fe3aeed10,"Revert ""unify license (#942)""","Revert ""unify license (#942)""
+
+This reverts commit 53799774f45a119234a89f791565e53aa26b4482.",
+51,flask,decision,b6e73305392c,https://github.com/pallets/flask/commit/b6e73305392c9de052e51cca6fae8fee12ae231e,Use setdefault() because it sets session.modified correctly.,Use setdefault() because it sets session.modified correctly.,
+52,requests,revert,23d8522285bd,https://github.com/psf/requests/commit/23d8522285bd7d7b4a1da46325aeac8814d87076,"Revert ""[kennethreitz/requests#1208] adding a max_retries argument""","Revert ""[kennethreitz/requests#1208] adding a max_retries argument""
+
+This reverts commit 796d3225ddf08a9ebaa429209b9d077c3a8f99b8.",
+53,django,constraint,8f75984c263b,https://github.com/django/django/commit/8f75984c263b89336cdf919c246a56ce49d07ddb,"On Firebird, 'value' is a reserved word and must be quoted.","Quoted field names in cache db backend SQL.
+
+On Firebird, 'value' is a reserved word and must be quoted.",
+54,django,constraint,7d9b29a56ddc,https://github.com/django/django/commit/7d9b29a56ddc1a793a02d55743c372a8256b97aa,"We now always use a plain Manager instance at that point (or something that can replace it, such as a GeoManager), making all existing rows in the database visible to the saving code.","Use plain model.Manager, or suitable proxy, for model saving.
+
+We can't use the default manager in Model.save_base(), since we need to
+retrieve existing objects which might be filtered out by that manager. We now
+always use a plain Manager instance at that point (or something that can
+replace it, such as a GeoManager), making all existing rows in the
+database visible to the saving code.
+
+The logic for detecting a ""suitable replacement"" plain base is the same as for
+related fields: if the use_for_related_fields is set on the manager subclass,
+we can use it. The general requirement here is that we want a base class that
+returns the appropriate QuerySet subclass, but does not restrict the rows
+returned.
+
+Fixed #8990, #9527.
+
+Refs #2698 (which is not fixed by this change, but it's the first part of a
+larger change to fix that bug.)
+
+git-svn-id: http://code.djangoproject.com/svn/django/trunk@10056 bcc190cf-cafb-0310-a4f2-bffc1f526a37",
+55,requests,revert,b58318163cad,https://github.com/psf/requests/commit/b58318163cadbe1f0738690eb779afcec786757e,"Revert ""Update certificate bundle.""","Revert ""Update certificate bundle.""",
+56,django,constraint,797957fb48f6,https://github.com/django/django/commit/797957fb48f63760442d3d4c8985fd94f8602d5e,CAST() must be wrapped in parentheses to be recognized as an expression on SQLite.,"Fixed #34936 -- Fixed migration crash for DecimalField with db_default on SQLite.
+
+CAST() must be wrapped in parentheses to be recognized as an expression on SQLite.
+
+Regression in 7414704e88d73dafbcfbb85f9bc54cb6111439d3.",
+57,flask,decision,5e8dd8b28725,https://github.com/pallets/flask/commit/5e8dd8b2872584483e7fb7506337a7d940ea8cc0,Changed sort_json test to test str sorting — Tests when simplejson was installed were failing because of a change in how it sorted in v3.0.0.,"Changed sort_json test to test str sorting
+
+Tests when simplejson was installed were failing because of a change in
+how it sorted in v3.0.0. This change first tests it via normal int
+sorting for stdlib json then if that fails, it tests against str sorting
+for simplejson.",
+58,requests,decision,662c3edacc76,https://github.com/psf/requests/commit/662c3edacc76d6a0e7b55b569c9fea38f8b0bc78,Allowing hooks to return responses that indicate errors — This commit changes that logic to test for None so that hooks that return failures can do so.,"Allowing hooks to return responses that indicate errors
+
+Since response objects for failures (4xx/5xx responses) evaluate to False
+in a boolean context, any hook which returns such a failure response will
+evaluate to False.
+
+The way hooks were setup, any failure response resulting from a hook would
+be ignored, and the initial response before it got processed by the hook
+would be substituted in its place. This commit changes that logic to test
+for None so that hooks that return failures can do so.",
+59,django,constraint,3d883e8bd96d,https://github.com/django/django/commit/3d883e8bd96df8f2166aec6331b80781463539a6,Fixed #20531 -- Don't hard-code class names when calling static methods,"Merge pull request #1232 from fusionbox/normalize_email
+
+Fixed #20531 -- Don't hard-code class names when calling static methods",
+60,django,constraint,8d6a20b656ff,https://github.com/django/django/commit/8d6a20b656ff3fa18e36954668a44a831c2f6ddd,It will now always return whether the file exists.,"Fixed #35604, Refs #35326 -- Made FileSystemStorage.exists() behaviour independent from allow_overwrite.
+
+Partially reverts 0b33a3abc2ca7d68a24f6d0772bc2b9fa603744e.
+
+Storage.exists(name) was documented to ""return False if
+the name is available for a new file."" but return True if
+the file exists. This is ambiguous in the overwrite file
+case. It will now always return whether the file exists.
+
+Thank you to Natalia Bidart and Josh Schneier for the
+review.",
+61,requests,revert,a89d5c003a87,https://github.com/psf/requests/commit/a89d5c003a8708e9555968f810311f3e019281c4,"Revert ""Clarify the contract of Response#ok, and avoid exceptions in it""","Revert ""Clarify the contract of Response#ok, and avoid exceptions in it""
+
+This reverts commit 086e19d8e175cccb630ee3589affdd2f38075ecd.",
+62,flask,decision,2889da67cb15,https://github.com/pallets/flask/commit/2889da67cb15ac6d5d882781d54014286d9ae010,Remove the async helper method — It is better to encourage users to utilise the app ensure_sync method (or the newely added async_to_sync method) so that any extensions that alter these methods take affect throughout the users code.,"Remove the async helper method
+
+It is better to encourage users to utilise the app ensure_sync method
+(or the newely added async_to_sync method) so that any extensions that
+alter these methods take affect throughout the users code.
+
+With the helper method users code fix parts of their code to the
+asgiref async_to_sync ignoring any extension changes.",
+63,gin,decision,d510595aa58c,https://github.com/gin-gonic/gin/commit/d510595aa58c2417373d89a8d8ffa21cf58673cb,"chore: add some annotations (#1544) — because I am not a native English, maybe have a bit problem.","chore: add some annotations (#1544)
+
+ref: #1075 
+because I am not a native English, maybe have a bit problem.",
+64,gin,revert,19f271c86ba0,https://github.com/gin-gonic/gin/commit/19f271c86ba04f2d56d342c20a3f1b16fe785c23,"Revert ""Merge pull request #744 from aviddiviner/logger-fix""","Revert ""Merge pull request #744 from aviddiviner/logger-fix""
+
+This reverts commit c3bfd69303d0fdaf2d43a7ff07cc8ee45ec7bb3f, reversing
+changes made to 9177f01c2843b91820780197f521ba48554b9df3.",
+65,gin,incident,bc2417fc40a8,https://github.com/gin-gonic/gin/commit/bc2417fc40a8f85fb36305dc05dc6ba3d09182a4,fix: description error (#2968),fix: description error (#2968),
+66,flask,decision,a64588f87a2b,https://github.com/pallets/flask/commit/a64588f87a2bd7ba557814ec039e3b2af2ce842d,Move file to sansio — This is preperation for refactoring the files so that there are sansio and flask specific versions.,"Move file to sansio
+
+This is preperation for refactoring the files so that there are sansio
+and flask specific versions. This structure follows the Werkzeug
+structure/pattern.",
+67,gin,decision,b1f77cf53615,https://github.com/gin-gonic/gin/commit/b1f77cf536154f67e3332fc5d0965b891be86606,feat(gin): add support for the HTTP QUERY method (RFC 10008) (#4806) — MethodQuery is declared in Gin because the standard library does not provide http.MethodQuery yet.,"feat(gin): add support for the HTTP QUERY method (RFC 10008) (#4806)
+
+* feat: add support for the HTTP QUERY method (RFC 10008)
+
+Add a QUERY shortcut on RouterGroup, a gin.MethodQuery constant and a
+gin.IQueryRoutes interface for callers that only hold an IRoutes value.
+
+QUERY is deliberately kept out of IRoutes and out of Any:
+
+- Adding a method to IRoutes would break every type outside of Gin that
+  implements it, such as test doubles and wrappers.
+- Leaving Any untouched keeps existing catch-all routes matching exactly
+  the methods they matched before. Match([]string{gin.MethodQuery, ...})
+  covers the case where QUERY is wanted alongside other methods.
+
+MethodQuery is declared in Gin because the standard library does not
+provide http.MethodQuery yet. The value stays correct once it does.
+
+Ref #4721
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+
+* fix(router): remove duplicate QUERY method
+
+- Consolidate QUERY into the existing router method after merging master
+- Preserve the MethodQuery constant and request body documentation
+
+---------
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+Co-authored-by: Bo-Yi Wu <appleboy.tw@gmail.com>",
+68,requests,incident,567e12bfb8d0,https://github.com/psf/requests/commit/567e12bfb8d0f4e2a4f6fddf0fab9ffbcbf6d49f,Add debugging submodule for bug reporters,"Add debugging submodule for bug reporters
+
+The suggested usage in a bug report would be
+
+    python -c 'from requests import _bug; _bug.print_information()'
+
+This should generate most of the information we tend to ask for
+repeatedly from bug reporters.",
+69,django,constraint,4593bc5da115,https://github.com/django/django/commit/4593bc5da115f2e808a803a4ec24104b6c7a6152,Plural value must be an integer.,"Refs #33879 -- Fixed plural value deprecation warnings.
+
+Plural value must be an integer.
+
+Regression in 8d67e16493c903adc9d049141028bc0fff43f8c8.",
+70,requests,revert,b15056d1d3c4,https://github.com/psf/requests/commit/b15056d1d3c4ca3546c88b9fe390f0721b198c2e,"Revert ""#4965 fix: Accessing response.content twice removes forgets read error.""","Revert ""#4965 fix: Accessing response.content twice removes forgets read error.""
+
+This reverts commit bd100472443dcf4189630f6b1ed3ec0a61259dd8.
+
+This reverts commit d91fe00983f1c66b9a428fe1ad15bf6ea8238972.",
+71,django,constraint,bf77669453b9,https://github.com/django/django/commit/bf77669453b9e9f64291da6701fe06fd5ba47e29,We assumed that any OneToOneField's in a child model must be the parent link and raised an error when parent_link=True was not specified.,"Fixed #29998 -- Allowed multiple OneToOneFields to the parent model.
+
+We assumed that any OneToOneField's in a child model must be the
+parent link and raised an error when parent_link=True was not
+specified. This patch allows to specify multiple OneToOneField's to
+the parent model.
+
+OneToOneField's without a custom related_name will raise fields.E304
+and fields.E305 so this should warn users when they try to override
+the auto-created OneToOneField.",
+72,gin,revert,d4e413648824,https://github.com/gin-gonic/gin/commit/d4e413648824333726ef65de5defc457e9dbf095,"Revert ""fix(uri): query binding bug (#3236)"" (#3899)","Revert ""fix(uri): query binding bug (#3236)"" (#3899)
+
+This reverts commit 8790d08909fc4d193c6c787c9c72f3089168f411.",
+73,requests,revert,6271046a271a,https://github.com/psf/requests/commit/6271046a271a689848e7658047436d644e295093,"Revert ""Cache the value of the `Response.text` property""","Revert ""Cache the value of the `Response.text` property""
+
+This reverts commit d232948188f922c137dd709b53f77c49d1442c84.",
+74,requests,revert,c01bc5be5ba0,https://github.com/psf/requests/commit/c01bc5be5ba0d4d5c7f516faae3493f1f41ef233,"Revert ""Lukasa is lazy""","Revert ""Lukasa is lazy""
+
+This reverts commit 178ff62b934c30278114028f654e42374206c291.",
+75,django,constraint,79c3f226dd6e,https://github.com/django/django/commit/79c3f226dd6e6a4dd27173d08b024bf756ea6e39,"In order to reuse another database, Django must use set_as_test_mirror.","Fixed #25357 -- Database deduplication on Oracle.
+
+In order to reuse another database, Django must use set_as_test_mirror.",
+76,requests,decision,d0285fac4203,https://github.com/psf/requests/commit/d0285fac4203e8cfed6b5ceeb96b2646076e745d,"Use user supplied options when resending authenticated requests — All keyword arguments should be passed along when hooks are dispatched so that if a user wanted to use a timeout, stream, specify a cert location with the verify flag, etc, their specification can be followed.","Use user supplied options when resending authenticated requests
+
+Hooks sometimes have to send requests (e.g. when responding to a 401 during
+authentication).
+
+All keyword arguments should be passed along when hooks are dispatched so that
+if a user wanted to use a timeout, stream, specify a cert location with the
+verify flag, etc, their specification can be followed.",
+77,gin,revert,8fb313666425,https://github.com/gin-gonic/gin/commit/8fb3136664254d7c592127f00d52849caba18a67,"Revert ""fix(time): binding time with empty value (#4103)"" (#4245)","Revert ""fix(time): binding time with empty value (#4103)"" (#4245)
+
+This reverts commit 674522db91d637d179c16c372d87756ea26fa089.",
+78,flask,incident,bb0084f5bef9,https://github.com/pallets/flask/commit/bb0084f5bef9b871a82f0451ed71131ffb7a43b3,Fix Py3 compat bug,"Fix Py3 compat bug
+
+Also don't use unicode string here because the assertions below are
+written for native strings.",
+79,click,incident,7b1d403523a4,https://github.com/pallets/click/commit/7b1d403523a419ab75b4f61588abc6629d395d16,"Fix clear() on win, colorama","Fix clear() on win, colorama
+
+win10, python2.7, installed click, colorama
+
+    python
+    >>>import click;click.clear()
+    [2J[1;1H>>>",
+80,click,incident,8af7ec14f3d9,https://github.com/pallets/click/commit/8af7ec14f3d936e02c2e4ee62d3573593868e07e,Fix #630: Bash completion for nested commands broken,"Fix #630: Bash completion for nested commands broken
+
+When concatenating protected_args and args, protected_args
+should be prepended. Otherwise the arguments are out
+of order and an incorrect subcommand is choosen.",

@@ -27,6 +27,7 @@ ALLOWED_SCANS = [
     (r"FROM symbols WHERE .*LIKE", "suffix match on a bare name (`refresh` -> `app.auth.refresh`)"),
     (r"^SELECT \* FROM retirements ORDER BY", "listing every retirement"),
     (r"^DELETE FROM symbol_versions$", "rebuilding history"),
+    (r"source_id LIKE 'commit:%'|id LIKE 'commit:%'", "re-mining commit events once, after an upgrade"),
 ]
 
 

@@ -195,15 +195,18 @@ def test_merged_branch_commits_are_diffed_in_one_git_process(tmp_path, monkeypat
     diffs = []
     real_run = subprocess.run
 
+    def is_patch_diff(args) -> bool:  # line ranges; the one file-list diff-tree is not counted here
+        return ("diff" in args or "diff-tree" in args) and ("-p" in args or "-U0" in args)
+
     def counting_run(args, *a, **kw):
-        if "diff" in args or "diff-tree" in args:
+        if is_patch_diff(args):
             diffs.append(args)
         return real_run(args, *a, **kw)
 
     real_stream = git.stream
 
     def counting_stream(repo_path, *args, **kw):
-        if "diff" in args or "diff-tree" in args:
+        if is_patch_diff(args):
             diffs.append(args)
         return real_stream(repo_path, *args, **kw)
 

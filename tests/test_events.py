@@ -11,6 +11,7 @@ from test_symbols import Repo, needs_git
 from whyfence import mcp_server, store
 from whyfence.ingest import events, git, symbols
 from whyfence.ingest.events import classify_commit, classify_turn, read_session
+from whyfence.store import Event, Source
 from whyfence.trust import Trust
 
 pytestmark = needs_git
@@ -566,3 +567,147 @@ def test_a_quoted_error_message_is_not_a_rule():
             "argument 2 must be string, not None")
     assert events.find_constraint(text) is None
     assert events.find_constraint("Callers must pass a str; a TypeError is raised otherwise.") is not None
+
+
+# --------------------------------------------------------------------------- #
+# 0.4.1: patterns from the 80-row development set (eval/blind-80-*.csv)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("message", [
+    "Revert \"Revert \"Merge Stable into master\"\"",            # click e2524373 (dev #48)
+    "Revert \"Revert \"Merge Stable into master\"\" (#3008)",    # click a8b41c07 (dev #18)
+    "Revert \"Revert \"Merge pull request #859 from wvh/register_error_handler\"\"",
+])
+def test_a_revert_of_a_revert_of_a_merge_is_housekeeping(message):
+    assert classify_commit(message) is None
+
+
+def test_other_reverts_still_count():
+    assert classify_commit('Revert "Use shlex.quote for quoting shell arguments"').kind == "revert"
+    assert classify_commit('Revert "Merge pull request #1710 from jvantuyl/master"').kind == "revert"
+    assert classify_commit('Revert "Revert "Make safe_mode play nice with timeout (fixes #312)""').kind == "revert"
+
+
+@pytest.mark.parametrize("message", [
+    "Added support for tuple types.  This fixes #239",                                    # dev #71
+    "Add @template_test() decorator for creating custom jinja2 tests, like existing "
+    "@template_filter() for filters.  Fixes #332",                                        # dev #66
+    "Added the JSONIFY_PRETTYPRINT_REGULAR config variable.  This fixes #725",
+    "Support Python 3.13\n\nCloses #2701",
+    "Adds a --quiet flag\n\nFixes #12",
+])
+def test_an_issue_reference_on_an_addition_is_not_an_incident(message):
+    assert classify_commit(message) is None
+
+
+@pytest.mark.parametrize("message", [
+    "Added a workaround for a pypy bug in context managers",   # dev #77: says "bug"
+    "Add skip to fix unnoticed bug with good imports",          # dev #78
+    "Fix bad import.  This fixes #454",
+    "Handle empty cache\n\nFixes #42",
+])
+def test_fixes_that_reference_issues_still_count(message):
+    finding = classify_commit(message)
+    assert finding is not None and finding.kind == "incident", message
+
+
+def test_rules_are_not_mined_from_code_blocks_or_tracebacks():
+    fenced = ("Better error message when view return type is not supported\n\nBefore, returning a `bool` "
+              "from a route caused the error\n\n```\nTraceback (most recent call last):\n  File \"app.py\", "
+              "line 2070, in make_response\nTypeError: The view function did not return a valid response. "
+              "The return type must be a string, tuple, Response instance, or WSGI callable, but it was a bool.\n```\n")
+    indented = ("Fixed #37222 -- Fixed QuerySet.distinct() crash on duplicated selections.\n\nOrdering referred "
+                "to each selection by its own position, so DISTINCT ON could not be\nmatched against:\n\n"
+                "    SELECT DISTINCT ON expressions must match initial ORDER BY\n    expressions\n\n"
+                "Ordering now refers to the first position an expression is selected at.\n")
+    raw = ("Fix crash\n\nTraceback (most recent call last):\n  File \"x.py\", line 1, in <module>\n"
+           "ValueError: the value must be positive\n\nNever call connect() with a negative timeout.\n")
+    for message in (fenced, indented):
+        _, _, body = message.partition("\n")
+        assert events.find_constraint(events._prose(body)) is None
+    _, _, body = raw.partition("\n")
+    assert events.find_constraint(events._prose(body)) == "Never call connect() with a negative timeout."
+
+
+@pytest.mark.parametrize("fragment", [
+    "must be importable for URL reversing to work correctly.",     # django fa63f1642d38 (dev #61)
+    "has to be defined before the first request.",
+    "should always be called with the lock held.",
+])
+def test_a_rule_with_no_subject_is_dropped(fragment):
+    assert events.find_constraint(fragment) is None
+
+
+@pytest.mark.parametrize("rule", [
+    "Never call deploy() from a request handler.",
+    "always pass InternalServerError instance to 500 handler",            # an imperative: implied subject
+    "--defaults-file must be given before other options.",                 # dev #65
+    "The namespace of the constraint must be included when making the constraint immediate.",
+])
+def test_rules_with_a_subject_or_imperative_are_kept(rule):
+    assert events.find_constraint(rule) == rule
+
+
+@pytest.mark.parametrize("path, code", [
+    ("docs/api.rst", False), ("README.md", False), ("CHANGES.rst", False), ("CHANGELOG", False),
+    ("src/pkg/README.md", False), ("examples/tutorial/app.py", False), ("tests/test_app.py", False),
+    ("test/helpers.py", False), ("pkg/foo_test.go", False), ("web/app.spec.ts", False),
+    ("src/__tests__/a.js", False), ("conftest.py", False), (".github/workflows/ci.yml", False),
+    ("tox.ini", False), (".travis.yml", False), ("noxfile.py", False), ("artwork/logo.png", False),
+    ("docs/_static/flask.svg", False),
+    ("flask/app.py", True), ("django/test/testcases.py", True),   # Django's test framework is product code
+    ("src/click/testing.py", True), ("requirements.txt", True), ("setup.py", True), ("Makefile", True),
+])
+def test_paths_that_cannot_change_behaviour(path, code):
+    assert events.is_code_path(path) is code, path
+
+
+def test_events_from_commits_touching_only_docs_tests_or_ci_are_skipped(repo_factory):
+    repo = repo_factory()
+    repo.commit("Add app", {"app/core.py": "def run():\n    return 1\n", "docs/index.rst": "Docs\n",
+                            "tests/test_core.py": "def test_run():\n    assert True\n"})
+    repo.commit("Fix crash in the docs build", {"docs/index.rst": "Docs, fixed\n"})
+    repo.commit("Fix flaky timeout handling", {"tests/test_core.py": "def test_run():\n    assert 1\n"})
+    repo.commit("fix: run() returned the wrong value\n\nWhy: callers expect 2.",
+                {"app/core.py": "def run():\n    return 2\n", "tests/test_core.py": "def test_run():\n    assert 2\n"})
+    repo.commit("Clarify that run() must be called once\n\nNever call run() twice in one process.",
+                {"docs/index.rst": "Docs: never call run() twice\n"})
+    repo.git("mv", "docs/index.rst", "app/index_doc.py")
+    repo.commit("fix: move the help page into the package")
+    with closing(store.connect()) as conn:
+        git.ingest_git(conn, repo.path)
+        symbols.ingest_symbols(conn, repo.path)
+        events.ingest_events(conn, repo.path, transcripts=False)
+        found = sorted(e.summary for e in store.events_between(conn))
+    assert found == ["fix: move the help page into the package", "fix: run() returned the wrong value"]
+
+
+def test_events_mined_by_an_older_whyfence_are_re_mined_without_rebuilding_symbols(repo_factory):
+    repo = repo_factory()
+    repo.commit("Add app", {"app/core.py": "def run():\n    return 1\n", "docs/index.rst": "Docs\n"})
+    repo.commit("Fix crash in the docs build", {"docs/index.rst": "Docs, fixed\n"})
+    with closing(store.connect()) as conn:
+        git.ingest_git(conn, repo.path)
+        symbols.ingest_symbols(conn, repo.path)
+        # What 0.4.0 left behind: the docs-only "incident", mined before the new rules existed.
+        store.insert_source(conn, Source("commit:x", "commit"))
+        sha = repo.git("rev-parse", "HEAD")
+        store.insert_event(conn, Event("incident", "Fix crash in the docs build", source_id="commit:x",
+                                       commit_sha=sha, confidence="INFERRED"))
+        store.set_meta(conn, events.MINING_KEY, "0.4.0")
+        versions_before = conn.execute("SELECT count(*) FROM symbol_versions").fetchone()[0]
+        events.ingest_events(conn, repo.path, transcripts=False)
+        assert [e.summary for e in store.events_between(conn)] == []
+        assert store.get_meta(conn, events.MINING_KEY) == events.MINING_VERSION
+        assert conn.execute("SELECT count(*) FROM symbol_versions").fetchone()[0] == versions_before
+
+
+def test_abbreviations_do_not_end_a_sentence():
+    # django 00dca6f0: "..., e.g. two volatile extra() selections must keep ordering ..." was cut at "e.g."
+    text = ("Raw selections are left out as equal SQL is not necessarily interchangeable, e.g. two volatile "
+            "extra() selections must keep ordering by their own position.")
+    assert events._sentences(text) == [text]
+    for abbreviation in ("i.e.", "etc.", "vs.", "cf."):
+        sentence = f"Callers {abbreviation} the request path must use the pool."
+        assert events._sentences(sentence) == [sentence], abbreviation
+    assert events._sentences("One. Two.") == ["One.", "Two."]

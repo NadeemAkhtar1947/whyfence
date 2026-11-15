@@ -89,6 +89,30 @@ label is left as it was given, so the comparison shows what each labeller actual
 These 80 rows are now a **development set**: the 0.4.1 filters were designed from their
 rejections, so numbers on them are not an unbiased measure.
 
+### 0.4.1 on the development set (not an unbiased measure)
+
+[`devset.py`](devset.py) re-mines the indexes the 80 rows came from and keeps a row only
+if the same event, with the same text, is still mined. One row (#63) changed text: its
+label no longer applies, so it counts as neither kept nor dropped.
+
+| kind | labeller | before (0.4.0) | after (0.4.1) | rows dropped | dropped but labelled correct |
+|---|---|---|---|---|---|
+| incident | Claude | 15/27 = 56% | 15/16 = 94% | 11 | 0 |
+| incident | reviewer | 14/27 = 52% | 14/16 = 88% | 11 | 0 |
+| decision | Claude | 11/14 = 79% | 10/10 = 100% | 4 | 1 |
+| decision | reviewer | 9/14 = 64% | 9/10 = 90% | 4 | 0 |
+| revert | Claude | 9/15 = 60% | 7/8 = 88% | 7 | 2 |
+| revert | reviewer | 8/15 = 53% | 8/8 = 100% | 7 | 0 |
+| rule | Claude | 14/24 = 58% | 13/16 = 81% | 7 | 1 |
+| rule | reviewer | 15/24 = 62% | 12/16 = 75% | 7 | 2 |
+
+What 0.4.1 loses here: #59 (a usage rule both labellers accepted, stated in a docs-only
+commit), #54 (a rule the reviewer accepted, from a commit that only removed a test), and,
+by Claude's original labels, the two reverts of reverted merges and one test-only decision
+that the new definitions no longer count. The unbiased number comes from the fresh blind
+sample (`fresh-80-blind.csv`, drawn by [`sample_fresh.py`](sample_fresh.py) after the
+changes, labelled separately by both labellers).
+
 ## Who labelled, and the limits
 
 The labels were made by Claude, the AI assistant that also wrote the classifier, as a

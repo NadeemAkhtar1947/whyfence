@@ -38,6 +38,11 @@ from whyfence.ingest.symbols import _unquote as unquote_path
 from whyfence.ingest.symbols import LANGUAGES, extract_symbols, language_for, module_name, qualify
 from whyfence.store import Commit, Event, Source
 
+MINING_KEY = "events.mining"  # meta key: which commit-mining rules built the events
+# Bump when commit mining finds different events, so they are re-mined (not the symbols).
+# 0.4.1: commits touching only docs/tests/CI/assets, "Add ... Fixes #N", reverts of reverted
+# merges, code blocks and tracebacks, rules without a subject.
+MINING_VERSION = "0.4.1"
 SUMMARY_LIMIT = 300
 BODY_LIMIT = 2000
 # An event touching more symbols than this is a broad change (a feature commit, a
@@ -51,11 +56,16 @@ CORRECTION_ANYWHERE_LIMIT = 300  # long messages are instructions; only short on
 
 # Subject only: a squash merge's body lists every commit on the branch, reverts included.
 _REVERT_RE = re.compile(r'^Revert "|^revert(?:\([^)]*\))?!?:', re.I)
+# Re-applying a reverted merge (`Revert "Revert "Merge ...""`) is branch housekeeping: it says
+# nothing about why any code is the way it is (both labellers of eval/blind-80 agreed).
+_REVERTED_MERGE_RE = re.compile(r'^Revert "Revert "Merge\b', re.I)
 _CONVENTIONAL_RE = re.compile(r"^([A-Za-z]+)(?:\([^)]*\))?!?:")
 _SCOPE_RE = re.compile(r"^[A-Za-z]+\(([^)]*)\)!?:")  # `fix(ci): ...` -> "ci"
 _FIX_TYPES = {"fix", "bugfix", "hotfix"}
 _FIX_SUBJECT_RE = re.compile(r"^fix(?:e[sd])?\b|\bbugs?\b|\bregression\b|\bcrash(?:es|ed|ing)?\b", re.I)
 _FIXES_ISSUE_RE = re.compile(r"\bfix(?:es|ed)?\s+#\d+", re.I)
+# "Added support for tuple types. This fixes #239": the issue was a feature request.
+_ADDITION_RE = re.compile(r"^(?:add(?:s|ed)?|support(?:s|ed)?)\b", re.I)
 # Correcting prose isn't an incident anyone needs to know about before changing the code.
 _TRIVIAL_FIX_RE = re.compile(r"\b(?:typos?|spelling|grammar|docs?|documentation|readme|changelog)\b", re.I)
 # Nor is fixing the tooling around the code. These match the phrasing of a tooling fix,
@@ -95,6 +105,7 @@ class CommitFinding:
     confidence: str
 
 
+_EXCEPTION_LINE_RE = re.compile(r"^[A-Za-z_][\w.]*(?:Error|Exception|Warning|Exit|Interrupt)\b")
 _TRAILER_RE = re.compile(r"^[A-Z][\w-]*-by:\s|^Change-Id:\s", re.I)  # Co-Authored-By:, Signed-off-by:, ...
 # Bodies wrap at 60-80 columns, so a wrapped line is nearly full. A shorter line ended on
 # purpose: flask 66b1b752 lists "don't remove handlers" (21) among items of 16-36 characters,
@@ -114,8 +125,25 @@ def _prose(message: str) -> str:
     """
     paragraphs: list[str] = []
     current: list[str] = []
-    in_bullet = False
+    in_bullet = in_fence = in_traceback = False
     for line in message.splitlines():
+        # Code and quoted output are not prose: a fenced or indented block, or a traceback
+        # (flask 8bb71852 quotes a traceback ending "... must be a string, tuple, ...";
+        # django 00dca6f0 indents PostgreSQL's "... must match initial ORDER BY").
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            line = ""
+        elif in_fence:
+            continue
+        elif line.startswith("Traceback (most recent call last)"):
+            in_traceback = True
+            line = ""
+        elif in_traceback:
+            if not line.strip() or _EXCEPTION_LINE_RE.match(line):
+                in_traceback = False
+            continue
+        elif (line.startswith(("    ", "\t")) and line.strip() and not in_bullet):
+            line = ""  # an indented code block ends the paragraph like a blank line
         if current and len(current[-1]) < WRAPPED_LINE:
             # The previous line stopped short of the wrap width: a deliberate break (a list
             # written without markers, say), not a sentence running on. Keep it on its own.
@@ -146,6 +174,8 @@ def classify_commit(message: str) -> CommitFinding | None:
     if subject.startswith("Merge "):
         return None  # merge commits describe branches, not code
     if _REVERT_RE.search(subject):
+        if _REVERTED_MERGE_RE.match(subject):
+            return None
         return CommitFinding("revert", "EXTRACTED")
     conventional = _CONVENTIONAL_RE.match(subject)
     commit_type = conventional.group(1).lower() if conventional else None
@@ -156,7 +186,8 @@ def classify_commit(message: str) -> CommitFinding | None:
         return CommitFinding("incident", "EXTRACTED")
     # A typed subject (feat:, docs:, ...) says what the commit is; a body that
     # mentions a bug or crash is context, not a fix.
-    if commit_type is None and not trivial and (_FIX_SUBJECT_RE.search(subject) or _FIXES_ISSUE_RE.search(message)):
+    issue_fixed = _FIXES_ISSUE_RE.search(message) is not None and not _ADDITION_RE.match(subject)
+    if commit_type is None and not trivial and (_FIX_SUBJECT_RE.search(subject) or issue_fixed):
         return CommitFinding("incident", "INFERRED")
     prose = _prose(message)
     if _RATIONALE_HEADER_RE.search(prose):
@@ -262,7 +293,10 @@ _INJECTED_TAGS = {
 # author planted, and they would otherwise be trusted as coming from your own session.
 _PASTED_TAGS = {"pasted_content"}
 _TAG_BLOCK_RE = re.compile(r"<([A-Za-z][\w-]*)\b[^>]*>(.*?)</\1\b[^>]*>", re.S)
-_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+# A period ends a sentence, except in "e.g.", "i.e.", "etc.", "vs." and "cf.": django 00dca6f0's
+# rule was cut at "e.g." to "two volatile extra() selections must keep ordering ...".
+_SENTENCE_RE = re.compile(
+    r"(?<=[.!?])(?<!\be\.g\.)(?<!\bi\.e\.)(?<!\betc\.)(?<!\bvs\.)(?<!\bcf\.)\s+|\n+", re.I)
 _PATH_RE = re.compile(
     r"(?<![\w/\\.:-])((?:[A-Za-z]:)?[/\\]?(?:[\w.-]+[/\\])*[\w.-]+\.(?:py|pyi|js|jsx|mjs|cjs|ts|tsx|mts|cts|go|rs|java))\b"
 )
@@ -388,11 +422,16 @@ def find_constraint(text: str) -> str | None:
     for sentence in _sentences(text):
         if sentence.endswith("?") or _QUOTED_ERROR_RE.search(sentence):
             continue  # a question, or an error message quoted ("TypeError: x must be string")
+        if _NO_SUBJECT_RE.match(sentence):
+            continue  # "must be importable for ...": the subject was lost in a wrapped line
         if _CONSTRAINT_RE.search(sentence):
             return sentence[:SUMMARY_LIMIT]
     return None
 
 
+# Lowercase on purpose: "must be importable for ..." is the tail of a wrapped line whose
+# subject was lost, while "Must use Decimal for money." is a terse rule written as a sentence.
+_NO_SUBJECT_RE = re.compile(r"(?:must|has to|have to|should|shall|needs? to|ought to)\b")
 _QUOTED_ERROR_RE = re.compile(r"\b[A-Z]\w*(?:Error|Exception|Warning):\s")
 
 
@@ -456,6 +495,76 @@ def _named_among(conn: sqlite3.Connection, text: str, candidates: set[str]) -> s
         known |= {symbol.qualified_name} if symbol else set()
         if any(q.rsplit(".", 1)[-1] in shorts or any(q == n or q.endswith("." + n) for n in names) for q in known):
             found.add(symbol_id)
+    return found
+
+
+# --------------------------------------------------------------------------- #
+# Commits that can't change behaviour
+# --------------------------------------------------------------------------- #
+
+# A commit that touches only these says nothing about why the code behaves as it does:
+# "Fix broken example", `Revert "updates to docs"`, "Fix flaky timeout handling" (24 of the
+# 34 rejections in eval/blind-80-reviewer.csv). Test directories count only at the top
+# level: django/test/ and click/testing.py are product code.
+_DOC_SUFFIXES = (".rst", ".md", ".markdown", ".adoc", ".asciidoc", ".rdoc")
+_DOC_NAMES = ("readme", "changes", "changelog", "history", "news", "authors", "contributing", "contributors",
+              "license", "licence", "copying", "code_of_conduct", "security", "releasing", "release_notes")
+_TOP_LEVEL_NON_CODE = {"docs", "doc", "documentation", "examples", "example", "samples", "tests", "test",
+                       "testing", "artwork", "assets", ".github", ".circleci", ".gitlab", ".azure-pipelines",
+                       ".devcontainer", ".vscode", ".idea"}
+_TEST_FILE_RE = re.compile(r"(?:^test_.*\.py|.*_test\.py|^conftest\.py|.*_test\.go|"
+                           r".*\.(?:test|spec)\.[cm]?[jt]sx?)$")
+_CI_FILES = {".travis.yml", "tox.ini", "noxfile.py", "appveyor.yml", ".appveyor.yml", ".gitlab-ci.yml",
+             "azure-pipelines.yml", ".pre-commit-config.yaml", "codecov.yml", ".codecov.yml", ".coveragerc",
+             ".readthedocs.yml", ".readthedocs.yaml", "readthedocs.yml", ".editorconfig", ".gitignore",
+             ".gitattributes", ".mailmap", "mkdocs.yml"}
+_ASSET_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".bmp", ".pdf", ".ttf", ".otf",
+                   ".woff", ".woff2", ".eot", ".psd", ".ai", ".xcf")
+
+
+def is_code_path(path: str) -> bool:
+    """Whether changing this file can change how the software behaves.
+
+    False for docs, examples, tests, CI configuration, changelogs and images. When in
+    doubt, True: a missed doc commit costs one noisy event, a missed code commit loses
+    a real one.
+    """
+    parts = PurePosixPath(path).parts
+    name = parts[-1].lower() if parts else ""
+    if parts and parts[0].lower() in _TOP_LEVEL_NON_CODE:
+        return False
+    if "__tests__" in parts or _TEST_FILE_RE.match(name):
+        return False
+    if name.endswith(_DOC_SUFFIXES + _ASSET_SUFFIXES) or name in _CI_FILES:
+        return False
+    if PurePosixPath(name).stem in _DOC_NAMES:
+        return False
+    return True
+
+
+def changed_paths(repo: Path, commits: Iterable[Commit]) -> dict[str, set[str]]:
+    """{sha: every path the commit changed against its first parent}, from one git process.
+
+    Renames are listed as both the old and the new path: moving code into docs/ is a
+    code change.
+    """
+    lines = [f"{c.sha} {c.parents[0]}" if c.parents else c.sha for c in commits]
+    if not lines:
+        return {}
+    result = subprocess.run(
+        git._git(repo, "diff-tree", "--stdin", "-r", "--root", "--no-renames", "--name-only", "--no-color",
+                 "--format=%x01%H"),
+        input="".join(f"{line}\n" for line in lines).encode(), capture_output=True)
+    if result.returncode != 0:
+        raise git.GitError(result.stderr.decode("utf-8", errors="replace").strip() or "git diff-tree failed")
+    found: dict[str, set[str]] = {}
+    current: set[str] | None = None
+    for raw in result.stdout.split(b"\n"):
+        line = raw.decode("utf-8", errors="replace").rstrip("\r")
+        if line.startswith("\x01"):
+            current = found.setdefault(line[1:].strip(), set())
+        elif line.strip() and current is not None:
+            current.add(unquote_path(line.strip()))
     return found
 
 
@@ -697,6 +806,10 @@ def ingest_commit_events(conn: sqlite3.Connection, linker: _Linker, result: Even
         found = [(event, relation) for event, relation in found if store.get_event(conn, event.id) is None]
         if found:
             pending.append((commit, found))
+    # A commit that only touched docs, examples, tests, CI or assets can't explain the code.
+    paths = changed_paths(linker.repo, [commit for commit, _ in pending])
+    pending = [(commit, found) for commit, found in pending
+               if not paths.get(commit.sha) or any(is_code_path(path) for path in paths[commit.sha])]
     # Classify first, then diff all the merged-branch commits that need links at once.
     linker.prepare_side_commits(c for c, _ in pending if not store.symbols_changed_in(conn, c.sha))
     for commit, found in pending:
@@ -816,6 +929,13 @@ def ingest_events(conn: sqlite3.Connection, repo: Path | str = ".", *,
     """Mine commits already in the index, then agent session logs for this repository."""
     result = EventIngestResult()
     root = git.repo_root(repo)
+    mined_by = store.get_meta(conn, MINING_KEY)
+    if mined_by != MINING_VERSION:
+        if mined_by is not None or store.count_commit_events(conn):
+            # Mining rules changed (0.4.1: docs-only commits, reverted merges, ...): re-mine commit
+            # events, which are derived from git. Symbols are untouched; session events stay.
+            store.forget_commit_events(conn)
+        store.set_meta(conn, MINING_KEY, MINING_VERSION)
     with git.BlobReader(root) as blobs:
         linker = _Linker(conn, root, blobs)
         ingest_commit_events(conn, linker, result, progress)
