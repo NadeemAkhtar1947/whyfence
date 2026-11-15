@@ -1,0 +1,81 @@
+n,repo,kind,sha,claude_label,claude_borderline,claude_note
+1,requests,revert,b98cc8b4e9d8,correct,,
+2,django,constraint,1a8fd5cf75bf,incorrect,,speculation about a possible future interface
+3,gin,revert,63b5d1c4c885,correct,,
+4,django,constraint,91e9f1c97284,incorrect,,describes lifting a restriction
+5,django,constraint,215647c0f761,incorrect,,describes a change
+6,requests,revert,780ce3902ecc,correct,,
+7,gin,decision,4c4444b16033,correct,,
+8,click,incident,bee33141650c,incorrect,,skips a flaky test (no files changed)
+9,requests,incident,cfa627ae62ce,correct,,
+10,flask,incident,7c40aa9e50d9,incorrect,,a new feature; 'Fixes #2376' is the request
+11,flask,incident,7242abcfb22c,correct,yes,
+12,requests,decision,20cd46426fda,correct,,
+13,requests,revert,8e69c9f0a16b,correct,,
+14,requests,incident,d22eaf96e2a1,correct,,
+15,requests,incident,1d7fd6c8b305,correct,,
+16,django,constraint,fe189dc43ab3,correct,,
+17,click,incident,37aa0c6568eb,incorrect,,"version metadata (CHANGES, pyproject, uv.lock)"
+18,django,constraint,02447fb133b5,incorrect,,explains why support was dropped
+19,gin,incident,d17e0a31b8ff,correct,yes,
+20,flask,decision,3d67736e090f,correct,,
+21,django,constraint,9ffab9cee1a5,correct,,
+22,requests,decision,c5fddb95edd7,correct,,
+23,requests,decision,a5f4f3c9a3da,incorrect,,pins a test dependency (Pipfile): tests only
+24,gin,incident,fadb06968fec,incorrect,,dependency metadata (Godeps.json)
+25,flask,decision,b5069d07a24a,correct,,
+26,gin,decision,2b8ed80da0b4,incorrect,,"describes a bug, not a choice"
+27,gin,revert,041ca04a4768,correct,,
+28,requests,decision,686db5d45253,correct,,
+29,requests,revert,488a51d619c7,correct,,
+30,gin,incident,7e64d32269d8,incorrect,,"tests only (context_test.go, test_helpers.go)"
+31,flask,decision,dbe0df756bf5,correct,,
+32,requests,decision,d505b94fa47d,correct,,
+33,django,constraint,8c72aa237918,correct,,
+34,requests,revert,53d60cac4f8d,incorrect,,"reverts CI (.travis.yml, Makefile)"
+35,gin,decision,d27685e714cb,incorrect,,module dependencies for examples
+36,requests,revert,91766548d10c,correct,,
+37,django,constraint,dc890bef5ad8,correct,yes,
+38,django,constraint,8914b571eb5f,incorrect,,explains an RFC grammar
+39,gin,constraint,3576efa535d1,correct,,
+40,flask,incident,3fd7abec3c8c,incorrect,,packaging metadata (project URLs in setup.py)
+41,requests,revert,b2ce5be9d049,correct,,
+42,django,constraint,1251772cb83a,incorrect,,explains what the fix resolved
+43,flask,incident,661ee54bc2bc,correct,,
+44,django,constraint,4bff19463361,correct,yes,
+45,gin,incident,ebe5e2a6bfdc,incorrect,,linter config (.golangci.yml)
+46,gin,revert,29a145c85dc0,correct,,
+47,requests,incident,32cc197a8150,correct,yes,
+48,click,incident,8c5f779185ca,correct,,
+49,requests,decision,b77c1a3debbc,incorrect,,corrects a code comment
+50,gin,revert,3b8150c83c53,incorrect,,reverts license headers
+51,flask,decision,b6e73305392c,correct,,
+52,requests,revert,23d8522285bd,correct,,
+53,django,constraint,8f75984c263b,correct,,
+54,django,constraint,7d9b29a56ddc,incorrect,,describes a change
+55,requests,revert,b58318163cad,correct,yes,
+56,django,constraint,797957fb48f6,correct,,
+57,flask,decision,5e8dd8b28725,incorrect,,tests only
+58,requests,decision,662c3edacc76,correct,,
+59,django,constraint,3d883e8bd96d,incorrect,,a change title (pull request)
+60,django,constraint,8d6a20b656ff,incorrect,,describes a change
+61,requests,revert,a89d5c003a87,correct,,
+62,flask,decision,2889da67cb15,correct,,
+63,gin,decision,d510595aa58c,incorrect,,adds comments; the 'reason' is about the author's English
+64,gin,revert,19f271c86ba0,correct,,
+65,gin,incident,bc2417fc40a8,incorrect,,fixes descriptions in comments
+66,flask,decision,a64588f87a2b,correct,,
+67,gin,decision,b1f77cf53615,correct,,
+68,requests,incident,567e12bfb8d0,incorrect,,a new feature for bug reporters
+69,django,constraint,4593bc5da115,correct,,
+70,requests,revert,b15056d1d3c4,correct,,
+71,django,constraint,bf77669453b9,incorrect,,describes an old wrong assumption
+72,gin,revert,d4e413648824,correct,,
+73,requests,revert,6271046a271a,correct,,
+74,requests,revert,c01bc5be5ba0,correct,,
+75,django,constraint,79c3f226dd6e,correct,yes,
+76,requests,decision,d0285fac4203,correct,,
+77,gin,revert,8fb313666425,correct,,
+78,flask,incident,bb0084f5bef9,incorrect,,a test fix (flask/testsuite/)
+79,click,incident,7b1d403523a4,correct,,
+80,click,incident,8af7ec14f3d9,correct,,

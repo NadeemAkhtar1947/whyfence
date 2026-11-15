@@ -61,20 +61,22 @@ why("app.models.TaskFile")
 | `revert` | Commit subjects like `Revert "…"` | |
 
 **How often is a mined event right?** Precision of commit-mined events, per kind, on a
-hand-labelled sample from flask, requests and click (up to 10 per kind per repository, so
-the kinds are not in their natural proportions and the rows don't add up to one number):
+fresh blind sample of 20 per kind, labelled independently by two people (one of them the
+AI assistant that wrote the classifier). Read each row only for the repositories named
+in it; the kinds are not in their natural proportions, so the rows don't add up to one
+number:
 
-| kind | precision |
-|---|---|
-| incident | 17/30 = 57% |
-| decision | 17/29 = 59% |
-| revert | 20/29 = 69% |
-| rule | 10/19 = 53% |
+| kind | repositories | labeller 1 | labeller 2 |
+|---|---|---|---|
+| incident | flask, requests, click, gin (5 each) | 50% | 45% |
+| decision | requests, flask, gin | 70% | 65% |
+| revert | requests, gin | 90% | 85% |
+| rule | **django (19 of 20 rows)** | 50% | 80% |
 
-The usual miss is a change to docs, examples, tests or CI that reads like a code
-change. [`eval/`](eval/) has the labels (each rejection with its reason), the criteria,
-the exact commits, who labelled them (the AI assistant that wrote the classifier, so
-check its work) and how to reproduce the numbers. Recall is not measured.
+The labellers agree closely except on rules, where one counts a lasting behaviour written
+as a change ("It will now always return …") and the other doesn't. [`eval/`](eval/) has
+both sets of labels, every disagreement with both reasons, the criteria, the exact
+commits and how to reproduce the numbers. Recall is not measured.
 
 Each event is linked to the **functions, methods and classes** it is about, and
 those links follow the code through history. whyfence indexes every Python,

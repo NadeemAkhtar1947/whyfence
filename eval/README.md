@@ -1,8 +1,46 @@
 # How often is a mined event right?
 
-Precision of the events whyfence mines from commit messages, on a labelled sample from
-three public repositories. It measures **precision only**: how many of the events it
-reports are what they claim to be, not how many it misses.
+Precision of the events whyfence mines from commit messages. It measures **precision
+only**: how many of the events it reports are what they claim to be, not how many it
+misses. Precision is reported **per kind only**: every sample is stratified, so the kinds
+are not in the proportions whyfence produces them, and pooling them would weight them
+wrongly.
+
+## whyfence 0.4.1: the fresh blind sample (the current numbers)
+
+80 commit-mined events, 20 per kind, drawn by [`sample_fresh.py`](sample_fresh.py)
+**after** the 0.4.1 changes were made, from events no one had labelled before
+([`fresh-80-blind.csv`](fresh-80-blind.csv)). Two labellers labelled it independently:
+Claude (the AI assistant that wrote the classifier; labels sealed with SHA-256
+`2faabdeb…dcdd71` before the reviewer's file existed) and a reviewer (`2d040f73…57968b7`).
+
+| kind | repositories behind the rows | Claude | reviewer | agreement | Cohen's κ |
+|---|---|---|---|---|---|
+| incident | flask 5, requests 5, click 5, gin 5 | 10/20 = 50% | 9/20 = 45% | 19/20 | 0.90 |
+| decision | requests 8, flask 7, gin 5 | 14/20 = 70% | 13/20 = 65% | 19/20 | 0.89 |
+| revert | requests 13, gin 7 | 18/20 = 90% | 17/20 = 85% | 19/20 | 0.77 |
+| rule: **django (19 of 20 rows)** | django 19, gin 1 | 10/20 = 50% | 16/20 = 80% | 14/20 | 0.40 |
+
+Read each row only for the repositories named in it. The rule row is essentially a django
+figure: flask, requests, click and gin have few commit-mined rules, and earlier samples
+used them up. Click had no unlabelled decisions or reverts left, and flask no unlabelled
+reverts.
+
+**Rules are where the labellers disagree** (κ 0.40, six of the nine disagreements). The
+reviewer accepts a lasting behaviour written as a change ("Made introspection always
+return a unicode …", "It will now always return whether the file exists"); Claude rejects
+those as change descriptions. Until that criterion is settled, rule precision on this
+sample is best read as somewhere between 50% and 80%. The other kinds agree closely.
+
+Both label files are here ([`fresh-80-claude.csv`](fresh-80-claude.csv),
+[`fresh-80-reviewer.csv`](fresh-80-reviewer.csv)), and every disagreement, with both
+reasons, is in [`fresh-80-disagreements.csv`](fresh-80-disagreements.csv);
+[`compare.py`](compare.py) recomputes the table. Eight of the nine are rows the reviewer
+marked borderline.
+
+## whyfence 0.4.0: the first sample
+
+On a labelled sample from three public repositories (Claude's labels only):
 
 | kind | click | flask | requests | **all three** |
 |---|---|---|---|---|
@@ -11,12 +49,7 @@ reports are what they claim to be, not how many it misses.
 | revert | 7/9 | 5/10 | 8/10 | **20/29 = 69%** |
 | rule (constraint) | 4/4 | 4/10 | 2/5 | **10/19 = 53%** |
 
-Precision is reported **per kind only**. The sample is stratified (up to ten events of each
-kind per repository), so kinds are not in the proportions whyfence produces them (most
-events are incidents). Pooling the rows into one number would weight them wrongly, so
-there is no overall figure.
-
-Measured with whyfence 0.4.0 (development). The most common false positive, in every
+Up to ten events of each kind per repository. Measured with whyfence 0.4.0 (development). The most common false positive, in every
 kind, is a change to docs, examples, tests or CI: "Fix broken example", "Update
 testing.rst", `Revert "Add python 3.9 to CI."`. Every rejected label says why in
 [`labels.jsonl`](labels.jsonl).
