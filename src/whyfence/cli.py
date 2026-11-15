@@ -99,7 +99,7 @@ def _print_trust_summary(console: Console, who: "trust.TrustSummary") -> None:
         commands = [f"whyfence trust {trust.email_of(author) or ''}" for author, _ in shown]
         width = max(len(command) for command in commands)
         console.print("[grey50]Most events by authors you don't trust yet:[/]")
-        for command, (author, count) in zip(commands, shown):
+        for command, (author, count) in zip(commands, shown, strict=True):
             name = author.split(" <")[0]
             console.print(f"  [cyan]{escape(command):<{width}}[/]  {_plural(count, 'event'):>10}  "
                           f"[grey50]{escape(name)}[/]", soft_wrap=True)
