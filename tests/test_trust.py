@@ -442,3 +442,81 @@ def test_the_github_hint_does_not_vouch_for_the_author():
     assert "by an author you trust" not in note
     assert "anyone" in note and "noreply@github.com" in note
     assert "`whyfence trust noreply@github.com`" in note
+
+
+# --------------------------------------------------------------------------- #
+# After ingest: who wrote what's in the index, and how to trust them
+# --------------------------------------------------------------------------- #
+
+BOB = "Bob <bob@example.org>"
+
+
+@pytest.fixture
+def crew(repo):  # noqa: F811
+    repo.git("config", "user.email", "ada@example.com")
+    repo.git("config", "user.name", "Ada")
+    repo.commit("Add deploy", {"app/ops.py": CODE})
+    commit_by(repo, ADA, ADA, "fix: deploy crashed on empty target",
+              {"app/ops.py": CODE.replace("build(target)", "build(target)  # a")})
+    for i in range(3):
+        commit_by(repo, MALLORY, MALLORY, f"fix: deploy bug {i}",
+                  {"app/ops.py": CODE.replace("build(target)", f"build(target)  # m{i}")})
+    commit_by(repo, BOB, BOB, "fix: deploy race",
+              {"app/ops.py": CODE.replace("build(target)", "build(target)  # b")})
+    commit_by(repo, ADA, GITHUB, "fix: deploy timeout (#7)",
+              {"app/ops.py": CODE.replace("build(target)", "build(target)  # g")})
+    return repo
+
+
+def test_trust_summary_counts_events_and_ranks_untrusted_authors(crew):
+    with closing(store.connect()) as conn:
+        ingest(crew, conn)
+        summary = trust.summary(conn, trust.load(crew.path))
+    assert (summary.total, summary.trusted) == (6, 1)
+    assert summary.untrusted_authors == [("Mallory <mallory@evil.example>", 3), ("Bob <bob@example.org>", 1)]
+    assert summary.github_merged == 1  # Ada's, committed by GitHub's web merge
+
+
+def test_ingest_prints_the_trust_summary_with_exact_commands(crew, capsys):
+    assert main(["ingest", str(crew.path), "--no-transcripts"]) == 0
+    out = " ".join(capsys.readouterr().out.split())
+    assert "6 events found, 1 from authors you trust" in out
+    assert out.index("whyfence trust mallory@evil.example") < out.index("whyfence trust bob@example.org")
+    assert "whyfence trust noreply@github.com" in out
+
+
+def test_no_trust_summary_when_everything_is_trusted(repo, capsys):  # noqa: F811
+    repo.git("config", "user.email", "ada@example.com")
+    repo.commit("Add deploy", {"app/ops.py": CODE})
+    repo.commit("fix: deploy crashed on empty target", {"app/ops.py": CODE.replace("build", "make")})
+    assert main(["ingest", str(repo.path), "--no-transcripts"]) == 0
+    out = capsys.readouterr().out
+    assert "whyfence trust" not in out and "from authors you trust" not in out
+
+
+def test_trust_summary_top_five_only(repo):  # noqa: F811
+    repo.git("config", "user.email", "ada@example.com")
+    repo.commit("Add deploy", {"app/ops.py": CODE})
+    for i in range(7):
+        who = f"P{i} <p{i}@example.net>"
+        for j in range(i + 1):
+            commit_by(repo, who, who, f"fix: bug {i}-{j}",
+                      {"app/ops.py": CODE.replace("build(target)", f"build(target)  # {i}-{j}")})
+    with closing(store.connect()) as conn:
+        ingest(repo, conn)
+        summary = trust.summary(conn, trust.load(repo.path))
+    assert [author for author, _ in summary.untrusted_authors[:5]] == [f"P{i} <p{i}@example.net>"
+                                                                        for i in (6, 5, 4, 3, 2)]
+    assert summary.untrusted_author_count == 7
+
+
+def test_trust_commands_are_never_wrapped_mid_command(crew, capsys):
+    """flask showed `whyfence trust` on one line and the email on the next at 80 columns."""
+    long_name = "Maximilian Very-Long-Surname-For-Wrapping <maximilian.very.long.address@example.org>"
+    for i in range(2):
+        commit_by(crew, long_name, long_name, f"fix: deploy edge case {i}",
+                  {"app/ops.py": CODE.replace("build(target)", f"build(target)  # x{i}")})
+    assert main(["ingest", str(crew.path), "--no-transcripts"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    for email in ("maximilian.very.long.address@example.org", "mallory@evil.example", "noreply@github.com"):
+        assert any(f"whyfence trust {email}" in line for line in lines), email

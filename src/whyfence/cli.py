@@ -61,6 +61,7 @@ def _ingest(args: argparse.Namespace) -> int:
             shared = team.import_shared(conn, root)
             total = store.count_commits(conn)
             symbol_count = store.count_symbols(conn)
+            who = trust.summary(conn, trust.load(root))
     except (git.GitError, store.StoreError, symbols.SymbolError) as exc:
         console.print(f"[red]error:[/] {escape(str(exc))}")
         return 2
@@ -79,7 +80,37 @@ def _ingest(args: argparse.Namespace) -> int:
                   f"with {_plural(mined.links, 'symbol link')}")
     if shared:
         console.print(f"Loaded {_plural(shared, 'event')} shared by your team from {team.EVENTS_DIR.as_posix()}/")
+    _print_trust_summary(console, who)
     return 0
+
+
+TOP_UNTRUSTED = 5
+
+
+def _print_trust_summary(console: Console, who: "trust.TrustSummary") -> None:
+    """Who wrote what's in the index, and the exact commands to trust them. Silent when all is trusted."""
+    if who.trusted == who.total:
+        return
+    console.print(f"\n[bold]Trust:[/] {_plural(who.total, 'event')} found, {who.trusted} from authors you trust. "
+                  "The others are kept, but agents get their rules and text only from authors you trust.")
+    shown = who.untrusted_authors[:TOP_UNTRUSTED]
+    if shown:
+        # Command first and never wrapped, so it can be copied whole whatever the terminal width.
+        commands = [f"whyfence trust {trust.email_of(author) or ''}" for author, _ in shown]
+        width = max(len(command) for command in commands)
+        console.print("[grey50]Most events by authors you don't trust yet:[/]")
+        for command, (author, count) in zip(commands, shown):
+            name = author.split(" <")[0]
+            console.print(f"  [cyan]{escape(command):<{width}}[/]  {_plural(count, 'event'):>10}  "
+                          f"[grey50]{escape(name)}[/]", soft_wrap=True)
+        rest = who.untrusted_author_count - len(shown)
+        if rest:
+            console.print(f"[grey50]  and {_plural(rest, 'more author')} with fewer events.[/]")
+    if who.github_merged:
+        console.print(f"  [cyan]whyfence trust {trust.GITHUB_WEB_MERGE}[/]  {_plural(who.github_merged, 'event')} "
+                      "claim an author you trust and a merge on github.com, whose committer name anyone "
+                      "can write", soft_wrap=True)
+    console.print("[grey50]Trust only people whose commits are reviewed before they reach your default branch.[/]")
 
 
 def _share(args: argparse.Namespace) -> int:

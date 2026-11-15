@@ -132,3 +132,37 @@ def origin(conn: sqlite3.Connection, event: Event, trust: Trust) -> dict[str, An
     if source is not None and source.kind == "transcript":
         return {"kind": "session", "agent": source.agent, "author": None, "trusted": True}
     return {"kind": source.kind if source else "unknown", "author": None, "trusted": trust.everyone}
+
+
+@dataclass
+class TrustSummary:
+    """Whose events are in an index, for the hint after `whyfence ingest`."""
+
+    total: int = 0
+    trusted: int = 0
+    untrusted_authors: list[tuple[str, int]] = field(default_factory=list)  # most events first
+    github_merged: int = 0  # events claiming a trusted author, committed by GitHub's web merge
+
+    @property
+    def untrusted_author_count(self) -> int:
+        return len(self.untrusted_authors)
+
+
+def summary(conn: sqlite3.Connection, trust: Trust) -> TrustSummary:
+    """Count events by trust, and rank the untrusted authors (by email) by how many they wrote."""
+    result = TrustSummary()
+    counts: dict[str, int] = {}
+    names: dict[str, str] = {}
+    for event in store.events_between(conn):
+        where = origin(conn, event, trust)
+        result.total += 1
+        if where["trusted"]:
+            result.trusted += 1
+        elif where.get("untrusted_because") == "github_web_merge":
+            result.github_merged += 1
+        elif (address := email_of(where.get("author"))) and not trust.trusts(where["author"]):
+            counts[address] = counts.get(address, 0) + 1
+            names.setdefault(address, where["author"])
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    result.untrusted_authors = [(names[address], count) for address, count in ranked]
+    return result
