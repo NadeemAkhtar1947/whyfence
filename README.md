@@ -450,7 +450,11 @@ only been tuned on a handful of real projects.
 - [x] Commits on merged branches link to the functions they changed (0.3.0)
 - [x] JavaScript/TypeScript assignments (`res.status = function`), exported objects, TS types (0.4.0)
 - [x] Faster ingest, with progress; measured precision of mined events ([`eval/`](eval/)) (0.4.0)
-- [ ] Fewer docs/test/CI changes mistaken for code changes (the main source of wrong events)
+- [ ] Fewer docs/test/CI changes mistaken for code changes (the main source of wrong events) (0.4.1)
+- [ ] Trust a whole email domain, `whyfence trust '*@company.com'` (0.4.1), with guards: refuse
+      free-mail and GitHub-noreply domains (`*@gmail.com` would trust millions), match the exact
+      domain only (not subdomains), and show how many authors in the repository's history it covers
+      before it takes effect
 - [ ] Codex CLI sessions (a reader is included but experimental: built from third-party
       descriptions of an undocumented format and not yet tested against a real session)
 

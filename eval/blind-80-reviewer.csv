@@ -1,0 +1,463 @@
+﻿n,repo,kind,sha,commit_url,whyfence_summary,full_commit_message,my_label,reviewer_label,reviewer_borderline,reviewer_reason
+1,flask,revert,024fbe5a6076,https://github.com/pallets/flask/commit/024fbe5a6076d0f3f793cd4a66d0b50decdb2a1a,"Revert ""Adds simplejson as a testing target."" (#1865)","Revert ""Adds simplejson as a testing target."" (#1865)",,n,,"Reverts a test/CI target (tests, tox.ini), not code."
+2,flask,revert,64ac1b0d3679,https://github.com/pallets/flask/commit/64ac1b0d367932331cb2fd373565d15f8ead1aeb,"Revert ""Close tag on js examples.""","Revert ""Close tag on js examples.""
+
+This reverts commit b7f6ff4f0b74076f21fa01013e7fb6e6194f578d.",,n,,Reverts an example template.
+3,click,incident,b073abe1cbc6,https://github.com/pallets/click/commit/b073abe1cbc67d2a29f13ac757774b49257c494b,Use Python sorting order for ZSH completions. Fixes #1047.,Use Python sorting order for ZSH completions. Fixes #1047.,,y,,Fixes completion ordering in code; closes an issue.
+4,requests,decision,0d7de50dbd7e,https://github.com/psf/requests/commit/0d7de50dbd7eacb0242506454363c71925d7241a,Just lstrip instead of strip because trailing whitespace already works.,Just lstrip instead of strip because trailing whitespace already works.,,y,,States a choice (lstrip) and its reason.
+5,requests,incident,eec44dbbb1a0,https://github.com/psf/requests/commit/eec44dbbb1a0ce0427bf5151aa32ad5fcd1898e5,Check that a filename is a basestring instance,"Check that a filename is a basestring instance
+
+Instead of only checking one or another type of string-like object that
+we accept, let's be able to check both. Previously, we only checked if
+the filename was an instance of the native str type which on Python 2
+excluded unicode filenames and bytes-like filenames on Python 3.
+
+Fixes #2411",,y,,Fixes filename type check; closes an issue.
+6,requests,revert,24bcb9eab60d,https://github.com/psf/requests/commit/24bcb9eab60d2db5e71979ea391b3e5675daff1f,"Revert ""Use urllib for chunked requests""","Revert ""Use urllib for chunked requests""
+
+This reverts commit 2da7fe08586aeaff614c017a9a834a22c937384a.",,y,,Undoes a code change in adapters.py.
+7,click,incident,76db878dc9a4,https://github.com/pallets/click/commit/76db878dc9a4096df2a663f5d721ddbe29f935c7,Fix merge conflicts in toc tree.,Fix merge conflicts in toc tree.,,n,,Docs toctree merge conflict.
+8,requests,incident,c32b046243dc,https://github.com/psf/requests/commit/c32b046243dcbf0dceb952da1317261109ac45c4,Fix missing space in error message,Fix missing space in error message,,n,yes,"Missing space in an error string: cosmetic, not a behaviour defect."
+9,requests,constraint,b5bd0f14cc6f,https://github.com/psf/requests/commit/b5bd0f14cc6fe12a712d21d7881aab59d0dd9951,"When trying to link via intersphinx, a label must be used.","docs: add label to socks heading
+
+When trying to link via intersphinx, a label must be used.
+Otherwise a full URL is required, which is less desirable.
+
+Signed-off-by: Mike Fiedler <miketheman@gmail.com>",,n,,"A rule about writing docs links, not about the code."
+10,flask,incident,5f7f3b17dfe2,https://github.com/pallets/flask/commit/5f7f3b17dfe2fbeecf82d5745c497b3ea94bf50a,Fix for d5cd4f8d which broke install on Windows,Fix for d5cd4f8d which broke install on Windows,,y,yes,"Fixes a Windows install regression; in setup.py, so packaging rather than library code."
+11,click,revert,48b4cf5fdefc,https://github.com/pallets/click/commit/48b4cf5fdefc6181b2d156aa27bf691295556f8e,"Revert ""Add python 3.9 to CI.""","Revert ""Add python 3.9 to CI.""",,n,,Reverts a CI change.
+12,flask,revert,c935eaceafeb,https://github.com/pallets/flask/commit/c935eaceafebaf167f6422fdbd0de3b6bbb96bdf,"Revert ""Handle BaseExceptions (#2222)""","Revert ""Handle BaseExceptions (#2222)""
+
+This reverts commit 1d4448abe335741c61b3c8c5f99e1607a13f7e3d.",,y,,Undoes a code change in app.py.
+13,click,decision,0e9c98ac06ea,https://github.com/pallets/click/commit/0e9c98ac06ea3fafaf6be8b01f981da626a9e7d6,"Extend Complex Application docs with Lazy Loading — Because this also introduces the risk of reckless copy-paste by novice users, a warning is included in the doc that is meant to point at a certain level of application maturity which should be reached before this strategy can be safely applied.","Extend Complex Application docs with Lazy Loading
+
+Resolves #945
+
+The goal of this example is to show how one might subclass Group, overriding
+`get_command` and `list_commands` with some importlib usage and a dict, and produce a
+viable lazy-loading solution.
+
+One significant benefit of offering an example is that it provides space to explain how
+and when `get_command` is invoked. i.e. Users might be surprised to realize that
+subcommands are resolved during completion scenarios.
+
+At the risk of diverging a small amount into what some would consider ""general deferred
+import semantics in python"", the section closes out with an example of a `click.command`
+decorated function which contains a deferred import. For codebases which have
+significant at-import-time work (e.g. importing `requests` or `urllib3`), this strategy
+is probably *more* useful than lazy loading of subcommands.
+
+Other variations on this same solution are possible, e.g. using
+`importlib.load_module(module_name, self.callback.__module__)` to handle imports
+relative to the definition of the callback function. However, any further work in this
+space is left as an exercise to readers of the doc.
+
+Importantly, unlike some solutions already discussed in #945, nothing about this is
+application-specific. The example LazyGroup implementation does not encode any knowledge
+about the structure of the codebase in which it is used, which means that users can
+copy-paste the example and expect it to work (within reason). Because this also
+introduces the risk of reckless copy-paste by novice users, a warning is included in the
+doc that is meant to point at a certain level of application maturity which should be
+reached before this strategy can be safely applied.",,n,,Docs-only commit; the reason is about a docs warning.
+14,flask,incident,235c52fa1009,https://github.com/pallets/flask/commit/235c52fa10094135746d04a5b6a7bea8125357f0,fix rtd build,fix rtd build,,n,,Read the Docs build config.
+15,requests,revert,b4354fc66f1e,https://github.com/psf/requests/commit/b4354fc66f1ed3b39b1752c3d1a0ccf8066509bf,"Revert ""Font layer convert to curves""","Revert ""Font layer convert to curves""
+
+This reverts commit af21ec6165c40c0c12f8dccc8379eb97de53da20.",,n,,Reverts a logo asset.
+16,click,revert,0d1b8eab4d44,https://github.com/pallets/click/commit/0d1b8eab4d44047b52746639d7836cc849626e59,"Revert ""Use shlex.quote for quoting shell arguments""","Revert ""Use shlex.quote for quoting shell arguments""
+
+This reverts commit e798f64ffde20c549e2e0df5834e4194c74adb0a.
+
+This caused issues if the editor command (etc.) had options like
+""less -FRSX"" because they would then get quoted as a single word.",,y,,Undoes a code change and says what it broke.
+17,click,incident,0b2e15e726e4,https://github.com/pallets/click/commit/0b2e15e726e42506bcec8c0ad444b035508b04b4,Fix broken example,Fix broken example,,n,,"Fixes a docstring example (checked the diff), not behaviour."
+18,click,revert,a8b41c077b22,https://github.com/pallets/click/commit/a8b41c077b225c30921a78190507a463a20ebb1b,"Revert ""Revert ""Merge Stable into master"""" (#3008)","Revert ""Revert ""Merge Stable into master"""" (#3008)",,n,yes,"Revert of a revert of a branch merge: housekeeping, tells an agent nothing about the code."
+19,requests,incident,34e3c7b68feb,https://github.com/psf/requests/commit/34e3c7b68febd3b320544e77037676a3a6f35f63,fix for #160,fix for #160,,y,,Checked the diff: patch() was dropping the data argument.
+20,click,decision,854cfb14c68f,https://github.com/pallets/click/commit/854cfb14c68fd6aadd56ecf454758115cb4d83eb,Rewrite testing docs and move from rst to myst (#2857) — Should have done this in a separate PR because the diff is basically useless.,"Rewrite testing docs and move from rst to myst (#2857)
+
+General rewrite of testing docs:
+    Add contents to the top.
+    Added sub commands and context headings. Rewrote the other sections
+
+Convert to myst:
+    Should have done this in a separate PR because the diff is basically useless. Open lastest docs side by side with docs generated by PR. The changes to the text are pretty straight forward.
+    Added dependencies so build will succeed.
+    Ran rst2myst to convert. Worked pretty well with a few typos. Next time should use uvx install to install in own environment since its requirements are not up to date so it will downgrade your sphinx if you install it in the project environment.
+
+Make dev environment nicer:
+    Add sphinx-autobuild so you can run sphinx-autobuild -b html ./docs ./_build and docs changes will rebuild and update on save. I have been using it for several years and it is quite nice.",,n,,Docs rewrite; the 'reason' is a remark about the PR.
+21,flask,constraint,66b1b752da1c,https://github.com/pallets/flask/commit/66b1b752da1ccc67c1073d4a99c4141a1b2be445,don't remove handlers,"simplify logging configuration
+single default handler and formatter
+don't remove handlers
+configure level once using setLevel
+document logging
+reorganize logging tests",,n,,"A changelog bullet describing this commit, not a lasting rule."
+22,requests,constraint,9c0db922497b,https://github.com/psf/requests/commit/9c0db922497bfb5827ba2e604fbcf4f02e248b8e,Now update the docs to clarify that Request will always use certificates from certifi.,"Clarify docs that Requests always uses certs from certifi
+
+Since commit 0d7de6430eef0cf09f9662746daf0c28d83f144e, certifi is always
+used for certificates. Certify became a hard dependency of the package
+in 628633143d5b8590b1dbdf5371fe81fb8250dffd.
+
+Now update the docs to clarify that Request will always use certificates
+from certifi.",,n,,Sentence says 'now update the docs'; not a rule.
+23,click,decision,280827938a50,https://github.com/pallets/click/commit/280827938a505b2a380ee96b16d2f431605bad83,"Allow a callable default to have its own string representation — Don't try too hard to show something else instead, because the developer most likely knows what he (or she) is doing.","Allow a callable default to have its own string representation
+
+As it was before 78a62b37c956e71b32689a0d5c75a684aa9ab56d.
+
+A callable can also be an object with __call__ and __str__ defined, in
+which case it makes sense to use it. Don't try too hard to show something
+else instead, because the developer most likely knows what he (or she) is
+doing.
+
+https://github.com/pallets/click/issues/2099",,y,,"Choice about callable defaults, with reason."
+24,requests,decision,e253eba5ed89,https://github.com/psf/requests/commit/e253eba5ed8922affe50089548a15fbda298fefd,"Stop abusing pytest-httpbin to test commonName support — With this change, we use `trustme` to create a broken certificate specifically for this test, so that we can upgrade pytest-httpbin and make sure that other tests relying on httpbin TLS support will continue to work with urllib3 2.0.","Stop abusing pytest-httpbin to test commonName support
+
+pytest-httpbin<1.0 ships with a server certificate with a commonName but
+no subjectAltName. urllib3 2.0 will stop supporting those in the future,
+so we want to upgrade pytest-httpbin.
+
+Unfortunately, `test_https_warnings` was relying on this broken
+certificate. With this change, we use `trustme` to create a broken
+certificate specifically for this test, so that we can upgrade
+pytest-httpbin and make sure that other tests relying on httpbin TLS
+support will continue to work with urllib3 2.0.",,n,yes,"A choice with a reason, but about test fixtures only."
+25,requests,constraint,6e1db2173321,https://github.com/psf/requests/commit/6e1db21733214e4d6707b0bc91b80499d4e946db,"We have to pass urllib3 the url without the authentication information, else it will be parsed by httplib as a netloc and included in the request line and Host header","fix #2247
+
+We have to pass urllib3 the url without the authentication information,
+else it will be parsed by httplib as a netloc and included in the request line
+and Host header",,y,,"Lasting rule: strip auth from the URL passed to urllib3, with the consequence."
+26,requests,incident,805abee9b4da,https://github.com/psf/requests/commit/805abee9b4da8837eab1165eba02b5db889e1fb3,Fixed wrong method call at streaming example,"Fixed wrong method call at streaming example
+
+405 is returned if POST request is performed to http://httpbin.org/stream/20",,n,,Fixes a docs example.
+27,click,revert,bb7be1f6a91f,https://github.com/pallets/click/commit/bb7be1f6a91f3fd1267d1a6d68771273d593f9c7,"Revert ""Use `default=True` as a sentinel for non-boolean flags""","Revert ""Use `default=True` as a sentinel for non-boolean flags""
+
+This reverts commit 6c4a77ba24854dab793a8ff72110a0a24c403c9f.",,y,,Undoes a code change in core.py.
+28,flask,constraint,185d7cbab279,https://github.com/pallets/flask/commit/185d7cbab279ef7c27b46694b4b6d93a8d6f0421,always pass InternalServerError instance to 500 handler,"Merge pull request #3266 from pallets/internal-server-error-type
+
+always pass InternalServerError instance to 500 handler",,y,,Lasting contract for 500 handlers.
+29,flask,incident,f25b5000fd7b,https://github.com/pallets/flask/commit/f25b5000fd7b85418d8ff85b070821748ef14f19,Do not register empty CLI groups from Blueprint,"Do not register empty CLI groups from Blueprint
+
+(Fixes #3224)",,y,,Fixes blueprint CLI registration; closes an issue.
+30,flask,revert,128bc76af0f6,https://github.com/pallets/flask/commit/128bc76af0f6c16ba71b41851be800ccdf354752,"Revert ""make external_url_handler example py3 compliant""","Revert ""make external_url_handler example py3 compliant""",,y,yes,"Message says 'example', but the diff changes a raise statement in helpers.py."
+31,click,decision,02ea9ee7e864,https://github.com/pallets/click/commit/02ea9ee7e864581258b4902d6e6c1264b0226b9f,"Added list of choices to termui prompt for user data if the data requested is a Choice. — It was odd that the user had to give incorrect input in order to be presented with the list of available options, for example:","Added list of choices to termui prompt for user data if the data requested is a Choice.
+
+It was odd that the user had to give incorrect input in order to be presented with the list of available options, for example:
+
+```
+Group by: something
+Error: invalid choice: something. (choose from none, day, week, month)
+```
+
+In the above example the user is asked to give the program some interval to group by but offers no help as to what the valid inputs are until the user has incorrectly entered 'something'. With the modifications included in this commit the prompt would look as follows:
+
+```
+Group by (none, day, week, month):
+```
+
+It is now clear to the user that it has a limited set of options to chose from. This of course works in combination with default options.
+
+```
+Group by (none, day, week, month) [week]:
+```
+
+It is possible to disable the display of the choices by passing show_choices=False just like passing show_default=False works.
+
+Also added a test for the new behaviour.",,y,,Choice (show choices in prompt) with the reason.
+32,click,incident,4592098a58de,https://github.com/pallets/click/commit/4592098a58de5425ce75f2a8768b79945c32d8bb,Fix crash when writing to unicode files,"Fix crash when writing to unicode files
+
+Fix #339",,y,,Crash fix.
+33,click,constraint,08f8211b068c,https://github.com/pallets/click/commit/08f8211b068ca23f026495bcc06123012ab2ffff,fix: always use parameter UTF-8 fallback,"Merge pull request #1468 from muggenhor/fix/utf-8-compat
+
+fix: always use parameter UTF-8 fallback",,n,yes,A fix description; out of context it does not say how the code must be used.
+34,requests,decision,13a6e02ccd0b,https://github.com/psf/requests/commit/13a6e02ccd0b932b9cf8b8eb88cdb47ee118bbd1,"Increasing super_len compatibilty to include BytesIO and cStringIO objects. — We also try/except the fileno() call, which can throw io.UnsupportedOperation for BytesIO because, well, they're not files.","Increasing super_len compatibilty to include BytesIO and cStringIO objects.
+
+Added a check for 'getvalue' attr, calling it to retrieve the length if we can.
+
+We also try/except the fileno() call, which can throw
+io.UnsupportedOperation for BytesIO because, well, they're not files.",,y,,Choice (try/except fileno) with reason.
+35,flask,decision,d9a98dd536b4,https://github.com/pallets/flask/commit/d9a98dd536b4cac42fc9012c6184251a5ae2ad7a,"Document flash message size limit — Messages of size 68,493 - 91,326 characters cause flash to fail silently. Session cookies cannot have such large messages.","Document flash message size limit
+
+Reason: Messages of size 68,493 - 91,326 characters cause flash to fail silently.
+Session cookies cannot have such large messages.
+
+Issue: pallets/flask#1789",,n,yes,"Docs-only change, though the fact (large flash messages fail silently) is useful."
+36,requests,decision,01993d21dc7d,https://github.com/psf/requests/commit/01993d21dc7d6fa8f0acf657425d2fead9b2ddea,"added tests for mixed-case scheme URLs, changed adapters passing down URLs into urllib3 by lower-ifying them so that the underlying pool manager can effectively pool by scheme as dictionary key","added tests for mixed-case scheme URLs, changed adapters passing down URLs into urllib3 by lower-ifying them so that the underlying pool manager can effectively pool by scheme as dictionary key",,y,,Choice (lower-case scheme) with reason (pooling key).
+37,click,constraint,26c9b926dfd9,https://github.com/pallets/click/commit/26c9b926dfd9ad9baa0b7ca764fc798a0149c455,"package name must match installed name, or be passed with package_name=","update changelog about version_option
+
+package name must match installed name, or be passed with package_name=",,y,,Usage rule for version_option.
+38,flask,revert,d8c39f4b3753,https://github.com/pallets/flask/commit/d8c39f4b3753c0ebc93177661c43bfe35d7c019c,"Revert ""wtforms: Add missing closing tags in example (#1917)""","Revert ""wtforms: Add missing closing tags in example (#1917)""
+
+This reverts commit 146cba53e7be1d433ecae9999ae662b48921e520.",,n,,Reverts a docs example.
+39,flask,revert,78b56dbf2cc5,https://github.com/pallets/flask/commit/78b56dbf2cc5834eb66ae7634241eaf9da99b04b,"Revert ""Add `python_requires` metadata for PyPI""","Revert ""Add `python_requires` metadata for PyPI""
+
+This reverts commit a22d143f96ee3c7d14887e871b34a84683835a3f.",,y,yes,Undoes a packaging metadata change in setup.py.
+40,click,decision,a94c0be3b539,https://github.com/pallets/click/commit/a94c0be3b53997b55ce5a0808da4ca3b0a0f44dc,Bugfix for Exit handling — Stick with the existing simple `ctx.exit()` call (no args) so that we don't run into these behaviors.,"Bugfix for Exit handling
+
+`rv = BaseCommand.invoke(ctx); ...; ctx.exit(rv)` seems correct at first
+blush, but there are actually important subtleties to consider here. For
+example, chained commands will produce a list of outputs, and that can
+have the consequence that `rv` is truthy -- but full of falsey values,
+possibly meant to indicate success.
+
+Stick with the existing simple `ctx.exit()` call (no args) so that we
+don't run into these behaviors. Add comments to `BaseCommand.main`
+explaining what's going on and why the logic is a little more nuanced
+than you might first guess.",,y,,Choice (keep ctx.exit() without args) with reason.
+41,requests,revert,0228851f19aa,https://github.com/psf/requests/commit/0228851f19aaf4b0f620c74cb08d295329431a3e,"Revert ""Merge pull request #1710 from jvantuyl/master""","Revert ""Merge pull request #1710 from jvantuyl/master""
+
+This reverts commit a8300c0ae6dd7e6b1655cf80b349e0bf645ff694, reversing
+changes made to 2e196be143035fa6d03743d6ca95a2904572f12a.",,y,,Undoes a merged code change.
+42,click,constraint,1a714b3d2c92,https://github.com/pallets/click/commit/1a714b3d2c9242b8a5d573c258f6c6941b505da1,Always return originally passed choice for Choice(),"Merge pull request #1318 from altendky/1277-altendky-return_exact_from_choice_insensitive
+
+Always return originally passed choice for Choice()",,y,,Lasting contract for Choice().
+43,requests,decision,9a20afd6b514,https://github.com/psf/requests/commit/9a20afd6b5140da4b9f187a3c0c6ea7010baeee9,Refactor default params — Specified the default argument for params that have a default in the docstring so that the default is easier to see from the code.,"Refactor default params
+
+Specified the default argument for params that have a default in the docstring
+so that the default is easier to see from the code. Modified the docstring in
+api.py to match the docstring in sessions.py.",,y,,"Choice with reason, though a small one."
+44,requests,revert,09fd857eb144,https://github.com/psf/requests/commit/09fd857eb1448a8234e39bc39e2c795d4c980bfb,"Revert ""Add trusted domains""","Revert ""Add trusted domains""
+
+This reverts commit fbe48fbb7c5b96cde3a16453311e45f723516afd.",,y,,Undoes a code change in sessions.py.
+45,click,constraint,3faede8b430e,https://github.com/pallets/click/commit/3faede8b430ef88f36d3efa513f5e4065a3f3a7e,"new function takes additional param arg, must return a homogeneous list of strings or CompletionItem, and must perform matching on results","rename autocompletion to shell_complete
+
+new function takes additional param arg, must return a homogeneous list
+of strings or CompletionItem, and must perform matching on results",,y,,API contract for shell_complete callbacks.
+46,flask,decision,27d28dcef4ce,https://github.com/pallets/flask/commit/27d28dcef4cee8765dcd7a567689d35a41ddcd75,Added Session again to the public API because existing code might import it,Added Session again to the public API because existing code might import it,,y,,Choice (re-export Session) with reason.
+47,flask,decision,eb9618347c68,https://github.com/pallets/flask/commit/eb9618347c680a038e2e6310228d85a53b080f93,Use pytz again for tests — This is because datetime.timezone is Python 3 only.,"Use pytz again for tests
+
+This is because datetime.timezone is Python 3 only.  The only
+alternative would be to hand-spin a datetime.tzinfo subclass, an
+overkill.
+
+This reverts commit 0e6cab357690614791ab4ca0da0ac65dbb803041.",,n,yes,"A choice with a reason, but about tests only."
+48,click,revert,e252437313eb,https://github.com/pallets/click/commit/e252437313eb364212fdb2d200902e2e8d28f3f9,"Revert ""Revert ""Merge Stable into master""""","Revert ""Revert ""Merge Stable into master""""
+
+This reverts commit 8bc912710774c7b4c84f5d4effd0c764f3e2bbb9.",,n,yes,Revert of a revert of a branch merge: housekeeping.
+49,flask,incident,0afeb1d11cad,https://github.com/pallets/flask/commit/0afeb1d11cad9aa42ef25cc20b10dcd67c8cf3c9,fix release date,fix release date,,n,,Changelog date.
+50,click,decision,1602436cd1bc,https://github.com/pallets/click/commit/1602436cd1bc65841ac0ac3b2ebe9ff94e7d1941,"Simplify Exit Exception — BaseCommand.main() will get the return value from `self.invoke` and pass it to `ctx.exit()`, so that commands which `return 1` will `ctx.exit(1)`","Simplify Exit Exception
+
+= Refactor BaseCommand to simplify Exit handling
+
+BaseCommand.main() will get the return value from `self.invoke` and
+pass it to `ctx.exit()`, so that commands which `return 1` will
+`ctx.exit(1)`
+This is not a behavioral change -- `ctx.exit()` already does this.
+
+Do not reraise Exit exceptions when invoked non-standalone. Instead,
+return their exit codes as the result of `BaseCommand.main`. So, a
+command which explicitly invokes `ctx.exit(0)` in its execution will
+effectively `return 0` instead of raising a specialized exception.
+
+= Make Exit its own RuntimeError subtype, don't pollute stdio on exit
+
+Exit exceptions should not be a subtype of ClickException with the
+output pretty-printing (`show()`) which happens when they are raised in
+non-standalone mode. That would make `ctx.exit(...)` needlessly pollute
+stderr. This would have downstream impact on everyone using context exit
+calls, and generally be a Bad Thing (tm).
+
+Instead, like Abort, Exit is a subclass of RuntimeError with very little
+""meat on its bones"". It's an exception containing a single integer (exit
+code)  which is then interpreted in that way in BaseCommand.main
+
+closes #533
+closes #667",,y,,Choice about exit handling with its purpose.
+51,flask,constraint,8bb718528499,https://github.com/pallets/flask/commit/8bb71852849907d1b67ba7514cf1812348e11b44,"The return type must be a string, tuple, Response instance, or WSGI callable, but it was a bool.","Better error message when view return type is not supported
+
+Before, returning a `bool` from a route caused the error
+
+```
+[2019-05-31 10:08:42,216] ERROR in app: Exception on / [GET]
+Traceback (most recent call last):
+  File ""/Users/johnzeringue/Documents/ts-open/flask/flask/app.py"", line 2070, in make_response
+    rv = self.response_class.force_type(rv, request.environ)
+  File ""/Users/johnzeringue/Documents/ts-open/flask/env/lib/python3.7/site-packages/werkzeug/wrappers/base_response.py"", line 269, in force_type
+    response = BaseResponse(*_run_wsgi_app(response, environ))
+  File ""/Users/johnzeringue/Documents/ts-open/flask/env/lib/python3.7/site-packages/werkzeug/wrappers/base_response.py"", line 26, in _run_wsgi_app
+    return _run_wsgi_app(*args)
+  File ""/Users/johnzeringue/Documents/ts-open/flask/env/lib/python3.7/site-packages/werkzeug/test.py"", line 1119, in run_wsgi_app
+    app_rv = app(environ, start_response)
+TypeError: 'bool' object is not callable
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File ""/Users/johnzeringue/Documents/ts-open/flask/flask/app.py"", line 2393, in wsgi_app
+    response = self.full_dispatch_request()
+  File ""/Users/johnzeringue/Documents/ts-open/flask/flask/app.py"", line 1906, in full_dispatch_request
+    return self.finalize_request(rv)
+  File ""/Users/johnzeringue/Documents/ts-open/flask/flask/app.py"", line 1921, in finalize_request
+    response = self.make_response(rv)
+  File ""/Users/johnzeringue/Documents/ts-open/flask/flask/app.py"", line 2078, in make_response
+    reraise(TypeError, new_error, sys.exc_info()[2])
+  File ""/Users/johnzeringue/Documents/ts-open/flask/flask/_compat.py"", line 39, in reraise
+    raise value.with_traceback(tb)
+  File ""/Users/johnzeringue/Documents/ts-open/flask/flask/app.py"", line 2070, in make_response
+    rv = self.response_class.force_type(rv, request.environ)
+  File ""/Users/johnzeringue/Documents/ts-open/flask/env/lib/python3.7/site-packages/werkzeug/wrappers/base_response.py"", line 269, in force_type
+    response = BaseResponse(*_run_wsgi_app(response, environ))
+  File ""/Users/johnzeringue/Documents/ts-open/flask/env/lib/python3.7/site-packages/werkzeug/wrappers/base_response.py"", line 26, in _run_wsgi_app
+    return _run_wsgi_app(*args)
+  File ""/Users/johnzeringue/Documents/ts-open/flask/env/lib/python3.7/site-packages/werkzeug/test.py"", line 1119, in run_wsgi_app
+    app_rv = app(environ, start_response)
+TypeError: 'bool' object is not callable
+The view function did not return a valid response. The return type must be a string, tuple, Response instance, or WSGI callable, but it was a bool.
+```
+
+Now, it returns the more readable
+
+```
+[2019-05-31 10:36:19,500] ERROR in app: Exception on / [GET]
+Traceback (most recent call last):
+  File ""/Users/johnzeringue/Documents/ts-open/flask/flask/app.py"", line 2400, in wsgi_app
+    response = self.full_dispatch_request()
+  File ""/Users/johnzeringue/Documents/ts-open/flask/flask/app.py"", line 1907, in full_dispatch_request
+    return self.finalize_request(rv)
+  File ""/Users/johnzeringue/Documents/ts-open/flask/flask/app.py"", line 1922, in finalize_request
+    response = self.make_response(rv)
+  File ""/Users/johnzeringue/Documents/ts-open/flask/flask/app.py"", line 2085, in make_response
+    "" {rv.__class__.__name__}."".format(rv=rv))
+TypeError: The view function did not return a valid response. The return type must be a string, dict, tuple, Response instance, or WSGI callable, but it was a bool.
+```
+
+Fixes #3214",,n,,Sentence lifted from a pasted traceback; it is the old error text.
+52,django,constraint,3ba7f2e9069c,https://github.com/django/django/commit/3ba7f2e9069c54db6d6d9d2fd1945b2dbc935d9c,While most backends will propagate derived table ordering as long as the outer query doesn't perform additional processing the SQL specs doesn't explicitly state the ordering must be maintained.,"Refs #28333 -- Explicitly ordered outer qualify query on window filtering.
+
+While most backends will propagate derived table ordering as long as
+the outer query doesn't perform additional processing the SQL specs
+doesn't explicitly state the ordering must be maintained.",,n,,"An explanation of SQL behaviour, not a rule for the code."
+53,django,constraint,089deb82b9ac,https://github.com/django/django/commit/089deb82b9ac2d002af36fd36f288368cdac4b53,"In order for Expression.relabeled_clone to work appropriately its get_source_expressions method must return all resolvable which wasn't the case for Lookup when its right-hand-side is ""direct"" (not a compilable).","Fixed #36025 -- Fixed re-aliasing of iterable (in/range) lookups rhs.
+
+In order for Expression.relabeled_clone to work appropriately its
+get_source_expressions method must return all resolvable which wasn't the case
+for Lookup when its right-hand-side is ""direct"" (not a compilable).
+
+While refs #22288 added support for non-literals iterable right-hand-side
+lookups it predated the subclassing of Lookup(Expression) refs #27021 which
+could have been an opportunity to ensure right-hand-sides are always resolvable
+(ValueList and ExpressionList).
+
+Addressing all edge case with non-resolvable right-hand-sides would require
+a significant refactor and deprecation of some parts of the Lookup interface so
+this patch only focuses on FieldGetDbPrepValueIterableMixin (In and Range
+lookups) by making sure that a right-hand-side containing resolvables are dealt
+with appropriately during the resolving phase.
+
+Thanks Aashay Amballi for the report.",,y,,Lasting invariant for get_source_expressions.
+54,django,constraint,4e8ecf0cb6ea,https://github.com/django/django/commit/4e8ecf0cb6ea36c45edb9cb86f0d63224e08097e,The distinct('description').order_by('pk') expression is not valid because SELECT DISTINCT ON must match initial ORDER BY expressions which is not the case here.,"Refs #19102 -- Removed flaky test Ticket19102Tests.test_ticket_19102_distinct_on.
+
+The subquery pushdown only happens because another table is involved in
+filter. It's not the distinct usage that causes the pushdown.
+
+The distinct('description').order_by('pk') expression is not valid
+because SELECT DISTINCT ON must match initial ORDER BY expressions
+which is not the case here.",,y,yes,"True usage rule (DISTINCT ON must match ORDER BY), though the commit only removes a test."
+55,django,constraint,22fc151bb86a,https://github.com/django/django/commit/22fc151bb86a553d84c62d7effd289356e9b6c6c,Note that we keep relying on db_type as opposed to performing an ArrayField instance check against the column's field as there could be other implementations of model fields that use Postgres arrays to store the optimization must be disabled for all of them.,"Fixed #36107 -- Adjusted UNNEST bulk_create strategy to opt-out sized arrays.
+
+The array fields opt-out heuristic failed to account for sized arrays.
+
+Note that we keep relying on db_type as opposed to performing an ArrayField
+instance check against the column's field as there could be other
+implementations of model fields that use Postgres arrays to store the
+optimization must be disabled for all of them.
+
+Refs #35936.
+
+Thanks Claude Paroz for the report and test.",,y,,Lasting design rule with its reason.
+56,django,constraint,2e8941b6f90e,https://github.com/django/django/commit/2e8941b6f90e65ffad3f07083b8de59e8ed29767,The namespace of the constraint must be included when making the constraint immediate.,"Fixed #31735 -- Fixed migrations crash on namespaced inline FK addition on PostgreSQL.
+
+The namespace of the constraint must be included when making the
+constraint immediate.
+
+Regression in 22ce5d0031bd795ade081394043833e82046016c.
+
+Thanks Rodrigo Estevao for the report.",,y,,Lasting rule for making constraints immediate.
+57,django,constraint,3ec6568e64d1,https://github.com/django/django/commit/3ec6568e64d14b6293e7e1b8df0987430ad20905,Django's own test runner to always use 'en' for LANGUAGE_CODE when testing core.,"Modified the test harness to respect the LANGUAGE_CODE setting. Also changed
+Django's own test runner to always use 'en' for LANGUAGE_CODE when testing
+core. Fixed #4709
+
+
+git-svn-id: http://code.djangoproject.com/svn/django/trunk@6583 bcc190cf-cafb-0310-a4f2-bffc1f526a37",,n,,Sentence fragment describing this change.
+58,django,constraint,3bd384aa6260,https://github.com/django/django/commit/3bd384aa62608ca2aebdf6d86ae1a75abb96f4bf,"Fieldset dictionary names, search fields and unique_together attribute names all have to be convertible to strings (that has always been true).","Fixed #10645 -- Added some robustness around some admin and modelform params.
+
+Fieldset dictionary names, search fields and unique_together attribute
+names all have to be convertible to strings (that has always been true).
+If somebody passes in a unicode object, Python barfs because Django uses
+those values as keyword argument names and function calls require
+parameter names to be str objects. We now convert thing to strs
+automatically.
+
+git-svn-id: http://code.djangoproject.com/svn/django/trunk@10510 bcc190cf-cafb-0310-a4f2-bffc1f526a37",,y,,Lasting requirement on admin/modelform params.
+59,django,constraint,f65e412abd28,https://github.com/django/django/commit/f65e412abd289f78aff278a782e29eff1749c6e5,"When using the template system in standalone mode and if the url template tag is used, ROOT_URLCONF has to be defined.","Fixed #18259 -- Specified that ROOT_URLCONF might be needed.
+
+When using the template system in standalone mode and if the url
+template tag is used, ROOT_URLCONF has to be defined.
+Thanks techtonik for the report.",,y,,Usage rule for standalone templates.
+60,django,constraint,42c08ee46539,https://github.com/django/django/commit/42c08ee46539ef44f8658ebb1cbefb408e0d03fe,Subquery annotation references must be resolved if they are excluded from the GROUP BY clause by a following .values() call.,"Fixed #31566 -- Fixed aliases crash when chaining values()/values_list() after annotate() with aggregations and subqueries.
+
+Subquery annotation references must be resolved if they are excluded
+from the GROUP BY clause by a following .values() call.
+
+Regression in fb3f034f1c63160c0ff13c609acd01c18be12f80.
+
+Thanks Makina Corpus for the report.",,y,,Lasting rule for subquery annotation references.
+61,django,constraint,fa63f1642d38,https://github.com/django/django/commit/fa63f1642d3899324a6d051e964ce4b878170ff9,must be importable for URL reversing to work correctly.,"Fixed #8975 -- Added a note to the documentation for reverse() that all views
+must be importable for URL reversing to work correctly.
+
+
+git-svn-id: http://code.djangoproject.com/svn/django/trunk@9167 bcc190cf-cafb-0310-a4f2-bffc1f526a37",,n,,Fragment with no subject: 'must be importable...'.
+62,django,constraint,fcec904e4f35,https://github.com/django/django/commit/fcec904e4f3582a45d4d8e309e71e9f0c4d79a0c,Therefore we must use our patched HTMLParser subclass in all Python 2.6 versions.,"Fix an HTML-parser test that's failed in Python 2.6.8 since 5c79dd58.
+
+The problem description in #18239 asserted that
+http://bugs.python.org/issue670664 was fixed in Python 2.6.8, but based on
+http://bugs.python.org/issue670664#msg146770 it appears that's not correct; the
+fix was only applied in 2.7, 3.2, and Python trunk. Therefore we must use our
+patched HTMLParser subclass in all Python 2.6 versions.",,y,,"Rule with reason; tied to Python 2.6 so stale today, but correct as mined."
+63,django,constraint,00dca6f097f4,https://github.com/django/django/commit/00dca6f097f443de7a24c04bc133f98c83c632aa,SELECT DISTINCT ON expressions must match initial ORDER BY expressions,"Fixed #37222 -- Fixed QuerySet.distinct() crash on duplicated selections.
+
+When two lookup paths resolve to the same column, values() selects that
+column once per path, at a different position each time. get_distinct()
+refers to such selections by expression, and PostgreSQL binds an
+expression reference to the first position the expression is selected
+at. Ordering referred to each selection by its own position, so the
+later ones yielded sort keys that DISTINCT ON could not be matched
+against:
+
+    SELECT DISTINCT ON expressions must match initial ORDER BY
+    expressions
+
+Ordering now refers to the first position an expression is selected at
+when distinct fields are used. Annotations take part in that, as
+PostgreSQL binds to their position as well when they select an
+expression first, but their alias keeps referring to their own position
+since get_distinct() refers to annotations by alias. Raw selections are
+left out as equal SQL is not necessarily interchangeable, e.g. two
+volatile extra() selections must keep ordering by their own position.
+
+Regression in 65ad4ade74dc9208b9d686a451cd6045df0c9c3a.
+
+Thanks Robert Leach for the report and Simon Charette for the review.",,y,yes,"A quoted PostgreSQL error, but it is a true lasting rule for this code."
+64,django,constraint,ab5720ad80b4,https://github.com/django/django/commit/ab5720ad80b48fac746021e826fe76d0869f9c02,These tests don't modify Number.float field.,"Removed unnecessary assertions in ExpressionOperatorTests.
+
+These tests don't modify Number.float field.",,n,,"A statement about tests, not a rule."
+65,django,constraint,e47b8293a793,https://github.com/django/django/commit/e47b8293a793653bd7df795c1d9f0381f3f22cf7,--defaults-file must be given before other options.,"Fixed #30636 -- Fixed options ordering when cloning test database on MySQL.
+
+--defaults-file must be given before other options.",,y,,Lasting rule for MySQL option order.
+66,flask,incident,f034d8d3451f,https://github.com/pallets/flask/commit/f034d8d3451f590fca1badeac5da0230bed9b148,"Add @template_test() decorator for creating custom jinja2 tests, like existing @template_filter() for filters.  Fixes #332","Add @template_test() decorator for creating custom jinja2 tests, like existing @template_filter() for filters.  Fixes #332",,n,,New feature; 'Fixes #332' is an issue reference.
+67,flask,incident,ea72e272a677,https://github.com/pallets/flask/commit/ea72e272a677365a60f1c412f91ebfac58ba13bb,Fixed a broken example,Fixed a broken example,,n,,Docs example.
+68,requests,incident,78dbb5bfbe41,https://github.com/psf/requests/commit/78dbb5bfbe41ba511387956f63dac72fc730708f,"Fix the cheeseshop mirror url from pip.kennethreitz to crate.io, since the former doesn't work anymore.","Fix the cheeseshop mirror url from pip.kennethreitz to crate.io, since the former doesn't work anymore.",,n,,Docs URL.
+69,click,incident,2ca87b3dcabd,https://github.com/pallets/click/commit/2ca87b3dcabd232142a0f2b8bdc3f60226bd2eb9,Fixed a bug with formatting for arguments,Fixed a bug with formatting for arguments,,y,,Bug fix in core.py.
+70,flask,incident,66c13955895c,https://github.com/pallets/flask/commit/66c13955895c7afb849513d9d0ff0f7f8361c511,Fixed wording,Fixed wording,,n,,Docs wording.
+71,click,incident,f7c124ed82ee,https://github.com/pallets/click/commit/f7c124ed82ee1307bf61be652367d8fc8097e4ed,Added support for tuple types.  This fixes #239,Added support for tuple types.  This fixes #239,,n,,New feature; 'fixes #239' is an issue reference.
+72,requests,incident,8d0889b91b7e,https://github.com/psf/requests/commit/8d0889b91b7e9d487e69eea00baed666a25259af,fix contextlib.closing bug for sessions where content is not consumed (issue #2593),fix contextlib.closing bug for sessions where content is not consumed (issue #2593),,y,,Bug fix in models.py.
+73,click,incident,4907043da781,https://github.com/pallets/click/commit/4907043da7818d947eb04b21a685c0bf70af6595,Fix SyntaxWarning in test over literal comparison.,Fix SyntaxWarning in test over literal comparison.,,n,,Test-only warning.
+74,requests,incident,3af2f456d8c0,https://github.com/psf/requests/commit/3af2f456d8c0a90bd6609f2205cd0b2d0f7f800e,Fix output of test_lowlevel tests in case of timeout (#6136),"Fix output of test_lowlevel tests in case of timeout (#6136)
+
+Signed-off-by: Olivier Gayot <olivier.gayot@canonical.com>",,n,,Test server output.
+75,requests,incident,6f84ce72f28a,https://github.com/psf/requests/commit/6f84ce72f28a58afa782db585a86aa10632447df,Fixed logic for auto redirect in GET and HEAD methods.,Fixed logic for auto redirect in GET and HEAD methods.,,y,,Redirect logic fix.
+76,flask,incident,8d330a368a7f,https://github.com/pallets/flask/commit/8d330a368a7f0aa6ba8508cb2b4b64f6415a0c7b,fixed issue #524,fixed issue #524,,y,yes,"Fixes a signature in scripts/flaskext_compat.py, a shipped helper."
+77,flask,incident,6ec83e18dca4,https://github.com/pallets/flask/commit/6ec83e18dca497a8fbfca6caca5999984bd32f2e,Added a workaround for a pypy bug in context managers,Added a workaround for a pypy bug in context managers,,y,,Workaround for a PyPy defect in ctx.py.
+78,flask,incident,f6c45afb6ffa,https://github.com/pallets/flask/commit/f6c45afb6ffa9fc1bd3d3637f7d38e423798dce9,Add skip to fix unnoticed bug with good imports,"Add skip to fix unnoticed bug with good imports
+
+Fixes logic so that imports that should not be changed are skipped, which was not happening correctly before.",,y,yes,"Bug fix, in a migration script rather than the library."
+79,requests,incident,fadcf799def1,https://github.com/psf/requests/commit/fadcf799def168cc2ac3c2f09c865745813fd043,fix unicode literal for python 3,fix unicode literal for python 3,,y,,Python 3 compatibility bug in models.py.
+80,requests,incident,fff5269d1a9e,https://github.com/psf/requests/commit/fff5269d1a9eb3c07acbbb0d995b689d674123c8,Fix app engine error for #498,Fix app engine error for #498,,y,,App Engine error fix in utils.py.

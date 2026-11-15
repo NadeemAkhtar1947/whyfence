@@ -51,6 +51,44 @@ The criteria were written before labelling:
 When a message didn't say what it changed ("fix for #160", "fix merge"), the label
 followed the files the commit touched.
 
+Added after the second labeller's review, and applied **from the next sample on** (the
+samples above were not relabelled):
+
+- a **decision** about tests, CI or docs only does not count;
+- a **revert** of a revert of a merge does not count (it is housekeeping and says nothing
+  about the code).
+
+## A second labeller
+
+An independent reviewer labelled an 80-row blind sample without seeing Claude's labels:
+the 50-row file plus 15 more rules and 15 more incidents (the rules from flask, requests,
+click and, because those three have only 20 commit-mined rules between them, 14 from
+django). Claude labelled the 30 new rows before reading the reviewer's file.
+[`blind-80-claude.csv`](blind-80-claude.csv) and
+[`blind-80-reviewer.csv`](blind-80-reviewer.csv) hold both sets, with a reason for each
+of the reviewer's labels.
+
+| kind | rows | Claude | reviewer | agreement | Cohen's κ |
+|---|---|---|---|---|---|
+| incident | 27 | 15/27 = 56% | 14/27 = 52% | 26/27 | 0.93 |
+| decision | 14 | 11/14 = 79% | 9/14 = 64% | 12/14 | 0.66 |
+| revert | 15 | 9/15 = 60% | 8/15 = 53% | 12/15 | 0.59 |
+| rule | 24 | 14/24 = 58% | 15/24 = 62% | 21/24 | 0.74 |
+
+The two agree on 71 of 80 rows. **All 9 disagreements are rows the reviewer marked
+borderline**; each is in [`blind-80-disagreements.csv`](blind-80-disagreements.csv) with
+both reasons. The reviewer was stricter on test-only decisions and on reverts of reverted
+merges; Claude was stricter on quoted error messages and explanations.
+
+**Known labelling error, #30** (flask `128bc76af0f6`, `Revert "make
+external_url_handler example py3 compliant"`): Claude labelled it incorrect, as reverting
+a docs example, going by the commit message. The reviewer checked the diff, which changes
+a `raise` statement in `flask/helpers.py`: it reverts code, so it is correct. Claude's
+label is left as it was given, so the comparison shows what each labeller actually did.
+
+These 80 rows are now a **development set**: the 0.4.1 filters were designed from their
+rejections, so numbers on them are not an unbiased measure.
+
 ## Who labelled, and the limits
 
 The labels were made by Claude, the AI assistant that also wrote the classifier, as a

@@ -1,0 +1,81 @@
+n,repo,kind,sha,claude_label,claude_note
+1,flask,revert,024fbe5a6076,incorrect,reverts a CI/test target
+2,flask,revert,64ac1b0d3679,incorrect,reverts a docs example
+3,click,incident,b073abe1cbc6,correct,
+4,requests,decision,0d7de50dbd7e,correct,
+5,requests,incident,eec44dbbb1a0,correct,
+6,requests,revert,24bcb9eab60d,correct,
+7,click,incident,76db878dc9a4,incorrect,docs toctree
+8,requests,incident,c32b046243dc,correct,
+9,requests,constraint,b5bd0f14cc6f,incorrect,a rule for writing docs
+10,flask,incident,5f7f3b17dfe2,correct,
+11,click,revert,48b4cf5fdefc,incorrect,reverts a CI change
+12,flask,revert,c935eaceafeb,correct,
+13,click,decision,0e9c98ac06ea,incorrect,docs change
+14,flask,incident,235c52fa1009,incorrect,docs build
+15,requests,revert,b4354fc66f1e,incorrect,reverts a logo change
+16,click,revert,0d1b8eab4d44,correct,
+17,click,incident,0b2e15e726e4,incorrect,docs example
+18,click,revert,a8b41c077b22,correct,
+19,requests,incident,34e3c7b68feb,correct,
+20,click,decision,854cfb14c68f,incorrect,docs change
+21,flask,constraint,66b1b752da1c,incorrect,a change-list item
+22,requests,constraint,9c0db922497b,incorrect,describes a docs update
+23,click,decision,280827938a50,correct,
+24,requests,decision,e253eba5ed89,correct,
+25,requests,constraint,6e1db2173321,correct,
+26,requests,incident,805abee9b4da,incorrect,docs example
+27,click,revert,bb7be1f6a91f,correct,
+28,flask,constraint,185d7cbab279,correct,
+29,flask,incident,f25b5000fd7b,correct,
+30,flask,revert,128bc76af0f6,incorrect,reverts a docs example
+31,click,decision,02ea9ee7e864,correct,
+32,click,incident,4592098a58de,correct,
+33,click,constraint,08f8211b068c,correct,
+34,requests,decision,13a6e02ccd0b,correct,
+35,flask,decision,d9a98dd536b4,incorrect,docs change
+36,requests,decision,01993d21dc7d,correct,
+37,click,constraint,26c9b926dfd9,correct,
+38,flask,revert,d8c39f4b3753,incorrect,reverts a docs example
+39,flask,revert,78b56dbf2cc5,correct,
+40,click,decision,a94c0be3b539,correct,
+41,requests,revert,0228851f19aa,correct,
+42,click,constraint,1a714b3d2c92,correct,
+43,requests,decision,9a20afd6b514,correct,
+44,requests,revert,09fd857eb144,correct,
+45,click,constraint,3faede8b430e,correct,
+46,flask,decision,27d28dcef4ce,correct,
+47,flask,decision,eb9618347c68,correct,
+48,click,revert,e252437313eb,correct,
+49,flask,incident,0afeb1d11cad,incorrect,release notes date
+50,click,decision,1602436cd1bc,correct,
+51,flask,constraint,8bb718528499,incorrect,a quoted error message (from a traceback)
+52,django,constraint,3ba7f2e9069c,incorrect,"an explanation, not a rule"
+53,django,constraint,089deb82b9ac,correct,
+54,django,constraint,4e8ecf0cb6ea,incorrect,explains why one test expression was invalid
+55,django,constraint,22fc151bb86a,correct,
+56,django,constraint,2e8941b6f90e,correct,
+57,django,constraint,3ec6568e64d1,incorrect,"a fragment with no subject, describing a test-harness change"
+58,django,constraint,3bd384aa6260,correct,
+59,django,constraint,f65e412abd28,correct,
+60,django,constraint,42c08ee46539,correct,
+61,django,constraint,fa63f1642d38,incorrect,a fragment with no subject
+62,django,constraint,fcec904e4f35,correct,
+63,django,constraint,00dca6f097f4,incorrect,a quoted PostgreSQL error message
+64,django,constraint,ab5720ad80b4,incorrect,"describes tests, not a rule"
+65,django,constraint,e47b8293a793,correct,
+66,flask,incident,f034d8d3451f,incorrect,a new feature; 'Fixes #332' is the feature request
+67,flask,incident,ea72e272a677,incorrect,docs example
+68,requests,incident,78dbb5bfbe41,incorrect,docs (install.rst)
+69,click,incident,2ca87b3dcabd,correct,
+70,flask,incident,66c13955895c,incorrect,wording
+71,click,incident,f7c124ed82ee,incorrect,a new feature; 'fixes #239' is the feature request
+72,requests,incident,8d0889b91b7e,correct,
+73,click,incident,4907043da781,incorrect,a warning in a test
+74,requests,incident,3af2f456d8c0,incorrect,test output
+75,requests,incident,6f84ce72f28a,correct,
+76,flask,incident,8d330a368a7f,correct,touched scripts/flaskext_compat.py (shipped code)
+77,flask,incident,6ec83e18dca4,correct,
+78,flask,incident,f6c45afb6ffa,correct,touched scripts/flaskext_migrate.py (shipped tool)
+79,requests,incident,fadcf799def1,correct,
+80,requests,incident,fff5269d1a9e,correct,
