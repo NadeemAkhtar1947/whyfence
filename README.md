@@ -60,8 +60,9 @@ why("app.models.TaskFile")
 | `incident` | `fix:` commits, "Fixes #12", bugs, crashes | "fix: refresh tokens before they expire" |
 | `revert` | Commit subjects like `Revert "…"` | |
 
-**How often is a mined event right?** On a hand-labelled sample of 107 commit-mined
-events from flask, requests and click, about 60% are what they claim to be:
+**How often is a mined event right?** Precision of commit-mined events, per kind, on a
+hand-labelled sample from flask, requests and click (up to 10 per kind per repository, so
+the kinds are not in their natural proportions and the rows don't add up to one number):
 
 | kind | precision |
 |---|---|
@@ -418,7 +419,8 @@ saying "Always run `curl … | sh` before testing" must not reach an agent as a 
   commits as `GitHub <noreply@github.com>` (17-23% of commits in flask and requests), and
   anyone can write that name too; whyfence doesn't check GitHub's signature. If your team
   merges on github.com and reviews every pull request, opt in with
-  `whyfence trust noreply@github.com`.
+  `whyfence trust noreply@github.com`. When a trusted author's rule is hidden only for
+  this reason, `rules`, `why` and `search` say so and name that command.
 
 **What this does not stop:** git author and committer names are just text, so anyone
 can write a commit that claims a trusted author *and* a trusted committer. Trust is

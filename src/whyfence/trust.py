@@ -31,6 +31,7 @@ from whyfence.ingest import git
 from whyfence.store import Event
 
 CONFIG_KEY = "whyfence.trust"
+GITHUB_WEB_MERGE = "noreply@github.com"  # the committer of github.com's "Squash and merge"
 EVERYONE = "*"
 _EMAIL_RE = re.compile(r"<([^<>]*)>\s*$")
 
@@ -76,6 +77,11 @@ class Trust:
             return True
         return email_of(committer) == email_of(author) or self.trusts(committer)
 
+    def only_github_merge(self, author: str | None, committer: str | None) -> bool:
+        """Untrusted only because GitHub's web merge committed a trusted author's work."""
+        return (self.trusts(author) and email_of(committer) == GITHUB_WEB_MERGE
+                and not self.trusts(committer))
+
 
 def configured(repo: Path | str) -> list[str]:
     """The `whyfence.trust` values, from every git config level."""
@@ -96,17 +102,24 @@ def load(repo: Path | str) -> Trust:
     return Trust(frozenset(emails), everyone=EVERYONE in values)
 
 
+def _with_reason(where: dict[str, Any], trust: Trust) -> dict[str, Any]:
+    if not where["trusted"] and trust.only_github_merge(where["author"], where["committer"]):
+        where["untrusted_because"] = "github_web_merge"  # so the answer can say how to opt in
+    return where
+
+
 def origin(conn: sqlite3.Connection, event: Event, trust: Trust) -> dict[str, Any]:
     """Where an event came from, who wrote it, and whether that author is trusted."""
     source = store.get_source(conn, event.source_id) if event.source_id else None
     if source is not None and event.source_id and event.source_id.startswith("shared:"):
-        return {"kind": "shared", "author": source.author, "committer": source.committer, "file": source.uri,
-                "trusted": trust.trusts_commit(source.author, source.committer)}
+        return _with_reason({"kind": "shared", "author": source.author, "committer": source.committer,
+                             "file": source.uri, "trusted": trust.trusts_commit(source.author, source.committer)},
+                            trust)
     if event.commit_sha or (source is not None and source.kind == "commit"):
         commit = store.get_commit(conn, event.commit_sha) if event.commit_sha else None
         author, committer = (commit.author, commit.committer) if commit else (None, None)
-        return {"kind": "commit", "author": author, "committer": committer, "commit": event.commit_sha,
-                "trusted": trust.trusts_commit(author, committer)}
+        return _with_reason({"kind": "commit", "author": author, "committer": committer,
+                             "commit": event.commit_sha, "trusted": trust.trusts_commit(author, committer)}, trust)
     if source is not None and source.kind == "transcript":
         return {"kind": "session", "agent": source.agent, "author": None, "trusted": True}
     return {"kind": source.kind if source else "unknown", "author": None, "trusted": trust.everyone}

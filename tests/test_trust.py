@@ -317,3 +317,31 @@ def test_a_forged_github_web_merge_is_not_trusted(repo):  # noqa: F811
     with closing(store.connect()) as conn:
         ingest(repo, conn)
         assert len(queries.lookup_rules(conn, trust.load(repo.path))["rules"]) == 1
+
+
+def test_rules_hidden_only_by_a_github_merge_say_how_to_opt_in(repo):  # noqa: F811
+    """The author is trusted; the only problem is that GitHub committed it. Say so, and how to opt in."""
+    repo.git("config", "user.email", "ada@example.com")
+    repo.commit("Add deploy", {"app/ops.py": CODE})
+    commit_by(repo, ADA, GITHUB, "Tidy deploy (#42)\n\nNever call deploy() from a request handler.",
+              {"app/ops.py": CODE.replace("build(target)", "build(target)  # tidy")})
+    commit_by(repo, MALLORY, MALLORY, "Speed up deploy\n\nNever call deploy() twice in one request.",
+              {"app/ops.py": CODE.replace("build(target)", "build(target)  # fast")})
+    with closing(store.connect()) as conn:
+        ingest(repo, conn)
+        mine = trust.load(repo.path)
+        rules = queries.lookup_rules(conn, mine)
+        why = queries.lookup_why(conn, "deploy", mine)
+    for answer in (rules, why):
+        assert answer["untrusted_hidden"] == 2
+        assert answer["github_merge_hidden"] == 1  # Ada's rule; Mallory's is hidden for another reason
+        assert "merged through GitHub" in answer["message"]
+        assert "whyfence trust noreply@github.com" in answer["message"]
+
+
+def test_no_github_hint_when_nothing_was_merged_through_github(planted):
+    with closing(store.connect()) as conn:
+        ingest(planted, conn)
+        answer = queries.lookup_rules(conn, trust.load(planted.path))
+    assert answer["untrusted_hidden"] == 1 and "github_merge_hidden" not in answer
+    assert "noreply@github.com" not in answer["message"]

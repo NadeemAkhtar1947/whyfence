@@ -4,13 +4,17 @@ Precision of the events whyfence mines from commit messages, on a labelled sampl
 three public repositories. It measures **precision only**: how many of the events it
 reports are what they claim to be, not how many it misses.
 
-| kind | click | flask | requests | **all** |
+| kind | click | flask | requests | **all three** |
 |---|---|---|---|---|
 | incident | 7/10 | 4/10 | 6/10 | **17/30 = 57%** |
 | decision | 6/9 | 5/10 | 6/10 | **17/29 = 59%** |
 | revert | 7/9 | 5/10 | 8/10 | **20/29 = 69%** |
 | rule (constraint) | 4/4 | 4/10 | 2/5 | **10/19 = 53%** |
-| all | 24/32 | 18/40 | 22/35 | **64/107 = 60%** |
+
+Precision is reported **per kind only**. The sample is stratified (up to ten events of each
+kind per repository), so kinds are not in the proportions whyfence produces them (most
+events are incidents). Pooling the rows into one number would weight them wrongly, so
+there is no overall figure.
 
 Measured with whyfence 0.4.0 (development). The most common false positive, in every
 kind, is a change to docs, examples, tests or CI: "Fix broken example", "Update

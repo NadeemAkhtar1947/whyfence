@@ -28,8 +28,11 @@ def main() -> int:
     rows = [json.loads(line) for line in args.labels.read_text(encoding="utf-8").splitlines() if line.strip()]
     repos = sorted({r["repo"] for r in rows})
     tally: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
+    # Per kind only. The sample is stratified (up to ten per kind per repository), so the
+    # kinds are not in their natural proportions; pooling them into one number would
+    # weight them wrongly, so no overall row is computed.
     for row in rows:
-        for key in ((row["kind"], row["repo"]), (row["kind"], "all"), ("all", row["repo"]), ("all", "all")):
+        for key in ((row["kind"], row["repo"]), (row["kind"], "all")):
             tally[key][0] += bool(row["correct"])
             tally[key][1] += 1
 
@@ -37,9 +40,9 @@ def main() -> int:
         right, total = tally.get((kind, repo), (0, 0))
         return f"{right}/{total}" if total else "-"
 
-    print(f"| kind | {' | '.join(repos)} | **all** |")
+    print(f"| kind | {' | '.join(repos)} | **all three** |")
     print("|---|" + "---|" * (len(repos) + 1))
-    for kind in (*KINDS, "all"):
+    for kind in KINDS:
         right, total = tally[(kind, "all")]
         label = "rule (constraint)" if kind == "constraint" else kind
         print(f"| {label} | {' | '.join(cell(kind, r) for r in repos)} | **{right}/{total} = {right / total:.0%}** |")

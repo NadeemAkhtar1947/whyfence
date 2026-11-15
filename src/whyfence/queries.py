@@ -101,7 +101,7 @@ def _plural(count: int, one: str, many: str) -> str:
 
 
 def _notes(untrusted: int = 0, stale: int = 0, retired_count: int = 0, withheld: int = 0,
-           omitted: int = 0) -> str | None:
+           omitted: int = 0, github: int = 0) -> str | None:
     """Say what was left out, and how to see it."""
     notes = []
     if omitted:
@@ -111,6 +111,11 @@ def _notes(untrusted: int = 0, stale: int = 0, retired_count: int = 0, withheld:
     if untrusted:
         notes.append(f"{_plural(untrusted, 'rule', 'rules')} from authors you haven't trusted (see `whyfence "
                      "trust`); pass include_untrusted=true to see them, marked")
+    if github:
+        notes.append(f"{_plural(github, 'rule', 'rules')} of those {'is' if github == 1 else 'are'} by an author "
+                     "you trust but merged through GitHub's web UI, whose committer (noreply@github.com) "
+                     "isn't trusted by default; if your team reviews every pull request, run "
+                     "`whyfence trust noreply@github.com`")
     if stale:
         notes.append(f"{_plural(stale, 'rule', 'rules')} about code that has since been deleted; "
                      "pass include_stale=true to see them")
@@ -187,7 +192,7 @@ def lookup_rules(conn: sqlite3.Connection, trust: Trust | None = None, *,
     trust = trust or Trust()
     rules: list[dict[str, Any]] = []
     seen: set[str] = set()
-    untrusted = stale = retired_count = 0
+    untrusted = stale = retired_count = github = 0
     candidates = [(event, origin(conn, event, trust)) for event in store.events_between(conn, kinds=["constraint"])]
     candidates.sort(key=lambda pair: not pair[1]["trusted"])  # stable: a trusted copy wins the dedupe
     for event, where in candidates:
@@ -200,6 +205,7 @@ def lookup_rules(conn: sqlite3.Connection, trust: Trust | None = None, *,
             continue
         if not where["trusted"] and not include_untrusted:
             untrusted += 1
+            github += where.get("untrusted_because") == "github_web_merge"
             continue
         old = is_stale(conn, event.id)
         if old and not include_stale:
@@ -216,10 +222,11 @@ def lookup_rules(conn: sqlite3.Connection, trust: Trust | None = None, *,
         })
     rules.sort(key=lambda rule: rule["recorded_at"], reverse=True)
     result: dict[str, Any] = {"status": "ok", "rules": rules}
-    for name, count in (("untrusted_hidden", untrusted), ("stale_hidden", stale), ("retired_hidden", retired_count)):
+    for name, count in (("untrusted_hidden", untrusted), ("github_merge_hidden", github), ("stale_hidden", stale),
+                        ("retired_hidden", retired_count)):
         if count:
             result[name] = count
-    note = _notes(untrusted, stale, retired_count)
+    note = _notes(untrusted, stale, retired_count, github=github)
     if note:
         result["message"] = note
     elif not rules:
@@ -247,7 +254,7 @@ def lookup_why(conn: sqlite3.Connection, symbol_name: str, trust: Trust | None =
     if isinstance(symbol, dict):
         return symbol
     events = []
-    untrusted = retired_count = withheld = 0
+    untrusted = retired_count = withheld = github = 0
     for event in store.events_for_symbol(conn, symbol.id):
         if retired(conn, event.id, trust):
             retired_count += 1
@@ -255,6 +262,7 @@ def lookup_why(conn: sqlite3.Connection, symbol_name: str, trust: Trust | None =
         where = origin(conn, event, trust)
         if event.kind == "constraint" and not where["trusted"] and not include_untrusted:
             untrusted += 1
+            github += where.get("untrusted_because") == "github_web_merge"
             continue
         source = store.get_source(conn, event.source_id) if event.source_id else None
         item = _event(conn, event, where, withhold=not where["trusted"] and not include_untrusted)
@@ -268,13 +276,15 @@ def lookup_why(conn: sqlite3.Connection, symbol_name: str, trust: Trust | None =
     result: dict[str, Any] = {"status": "ok", "symbol": _symbol(symbol), "events": events}
     if untrusted:
         result["untrusted_hidden"] = untrusted
+    if github:
+        result["github_merge_hidden"] = github
     if retired_count:
         result["retired_hidden"] = retired_count
     if withheld:
         result["withheld"] = withheld
     if omitted:
         result["omitted"] = omitted
-    note = _notes(untrusted, 0, retired_count, withheld, omitted)
+    note = _notes(untrusted, 0, retired_count, withheld, omitted, github)
     if note:
         result["message"] = note
     elif not events:
@@ -299,7 +309,7 @@ def lookup_search(conn: sqlite3.Connection, text: str, trust: Trust | None = Non
     if not text.split():
         return {"status": "error", "query": text, "message": "Give some words to search for."}
     hits: list[dict[str, Any]] = []
-    untrusted = retired_count = withheld = 0
+    untrusted = retired_count = withheld = github = 0
     for event in store.search_events(conn, text, limit=limit * 3):  # room for the ones left out
         if retired(conn, event.id, trust):
             retired_count += 1
@@ -307,6 +317,7 @@ def lookup_search(conn: sqlite3.Connection, text: str, trust: Trust | None = Non
         where = origin(conn, event, trust)
         if event.kind == "constraint" and not where["trusted"] and not include_untrusted:
             untrusted += 1
+            github += where.get("untrusted_because") == "github_web_merge"
             continue
         if len(hits) == limit:
             continue
@@ -317,11 +328,13 @@ def lookup_search(conn: sqlite3.Connection, text: str, trust: Trust | None = Non
     result: dict[str, Any] = {"status": "ok", "query": text, "events": hits}
     if untrusted:
         result["untrusted_hidden"] = untrusted
+    if github:
+        result["github_merge_hidden"] = github
     if retired_count:
         result["retired_hidden"] = retired_count
     if withheld:
         result["withheld"] = withheld
-    note = _notes(untrusted, 0, retired_count, withheld)
+    note = _notes(untrusted, 0, retired_count, withheld, github=github)
     if note:
         result["message"] = note
     elif not hits:
